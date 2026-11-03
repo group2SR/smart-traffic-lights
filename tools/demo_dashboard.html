@@ -1,0 +1,2644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SMART TRAFFIC CONTROL — ESP32 Traffic Management Dashboard</title>
+  <style>
+    :root {
+      /* Primary — White */
+      --bg-page: #FFFFFF;
+      --bg-card: #FFFFFF;
+      --bg-surface: #FFFFFF;
+      --bg-neutral: #F8FAFC;
+      --text-primary: #17212B;
+      --text-secondary: #64748B;
+      --border-sep: #E2E8F0;
+
+      /* Secondary — Teal Green */
+      --teal-primary: #0F766E;
+      --teal-hover: #115E59;
+      --teal-light: #F0FDFA;
+      --teal-border: #99F6E4;
+      --teal-muted: #5EEAD4;
+
+      /* Status Supporting Colors */
+      --status-success: #15803D;
+      --status-success-bg: #F0FDF4;
+      --status-success-border: #BBF7D0;
+      --status-warning: #D97706;
+      --status-warning-bg: #FFFBEB;
+      --status-warning-border: #FDE68A;
+      --status-error: #DC2626;
+      --status-error-bg: #FEF2F2;
+      --status-error-border: #FECACA;
+
+      /* Traffic Signal Indications Only */
+      --sig-red-on: #DC2626;
+      --sig-red-glow: rgba(220, 38, 38, 0.35);
+      --sig-yellow-on: #EAB308;
+      --sig-yellow-glow: rgba(234, 179, 8, 0.38);
+      --sig-green-on: #16A34A;
+      --sig-green-glow: rgba(22, 163, 74, 0.35);
+      --sig-off: #CBD5E1;
+
+      /* Shadows & Radius */
+      --shadow-sm: 0 1px 2px 0 rgba(23, 33, 43, 0.05);
+      --shadow-card: 0 1px 3px 0 rgba(23, 33, 43, 0.07), 0 1px 2px -1px rgba(23, 33, 43, 0.05);
+      --radius-md: 8px;
+      --radius-lg: 12px;
+      --font-sans: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+      --font-mono: "Cascadia Mono", "Consolas", "Courier New", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-page);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      line-height: 1.5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    :focus-visible {
+      outline: 3px solid var(--teal-primary);
+      outline-offset: 2px;
+    }
+
+    /* Header */
+    .app-header {
+      background-color: var(--bg-surface);
+      border-bottom: 2px solid var(--teal-border);
+      padding: 1rem 1.5rem;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .header-inner {
+      max-width: 1440px;
+      margin: 0 auto;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .brand-group {
+      display: flex;
+      align-items: center;
+      gap: 0.875rem;
+    }
+
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      border-radius: var(--radius-md);
+      background-color: var(--teal-light);
+      border: 1.5px solid var(--teal-border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--teal-primary);
+      flex-shrink: 0;
+    }
+
+    .brand-title {
+      font-size: 1.15rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      color: var(--text-primary);
+      line-height: 1.2;
+    }
+
+    .brand-subtitle {
+      font-size: 0.825rem;
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+
+    .header-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.35rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.775rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      border: 1px solid var(--border-sep);
+      background-color: var(--bg-neutral);
+      color: var(--text-primary);
+      white-space: nowrap;
+    }
+
+    .badge-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: var(--text-secondary);
+    }
+
+    /* Connection Status Badge Variants */
+    .badge[data-status="DISCONNECTED"] {
+      background-color: var(--bg-neutral);
+      color: var(--text-secondary);
+      border-color: var(--border-sep);
+    }
+    .badge[data-status="DISCONNECTED"] .badge-dot {
+      background-color: var(--text-secondary);
+    }
+
+    .badge[data-status="CONNECTING"] {
+      background-color: var(--teal-light);
+      color: var(--teal-primary);
+      border-color: var(--teal-border);
+    }
+    .badge[data-status="CONNECTING"] .badge-dot {
+      background-color: var(--teal-primary);
+    }
+
+    .badge[data-status="CONNECTED"] {
+      background-color: var(--status-success-bg);
+      color: var(--status-success);
+      border-color: var(--status-success-border);
+    }
+    .badge[data-status="CONNECTED"] .badge-dot {
+      background-color: var(--status-success);
+    }
+
+    .badge[data-status="TELEMETRY STALE"] {
+      background-color: var(--status-warning-bg);
+      color: var(--status-warning);
+      border-color: var(--status-warning-border);
+    }
+    .badge[data-status="TELEMETRY STALE"] .badge-dot {
+      background-color: var(--status-warning);
+    }
+
+    .badge[data-status="SERIAL LOST"],
+    .badge[data-status="ERROR"] {
+      background-color: var(--status-error-bg);
+      color: var(--status-error);
+      border-color: var(--status-error-border);
+    }
+    .badge[data-status="SERIAL LOST"] .badge-dot,
+    .badge[data-status="ERROR"] .badge-dot {
+      background-color: var(--status-error);
+    }
+
+    /* Mode Badge Variants */
+    .badge-mode[data-mode="HARDWARE_READY"] {
+      background-color: var(--teal-light);
+      color: var(--teal-primary);
+      border-color: var(--teal-border);
+    }
+    .badge-mode[data-mode="SERIAL_SIMULATION"] {
+      background-color: var(--status-warning-bg);
+      color: var(--status-warning);
+      border-color: var(--status-warning-border);
+    }
+
+    .telemetry-timestamp {
+      font-size: 0.775rem;
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+      padding: 0.25rem 0.5rem;
+      background-color: var(--bg-neutral);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-sep);
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.45rem;
+      padding: 0.5rem 0.95rem;
+      font-size: 0.84rem;
+      font-weight: 600;
+      font-family: var(--font-sans);
+      border-radius: var(--radius-md);
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+      text-align: center;
+      line-height: 1.25;
+    }
+
+    .btn:disabled {
+      opacity: 0.48;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    .btn-primary {
+      background-color: var(--teal-primary);
+      color: #FFFFFF;
+      border-color: var(--teal-primary);
+    }
+    .btn-primary:hover:not(:disabled) {
+      background-color: var(--teal-hover);
+      border-color: var(--teal-hover);
+    }
+
+    .btn-secondary {
+      background-color: #FFFFFF;
+      color: var(--teal-primary);
+      border-color: var(--teal-border);
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background-color: var(--teal-light);
+      border-color: var(--teal-primary);
+    }
+
+    .btn-outline {
+      background-color: #FFFFFF;
+      color: var(--text-primary);
+      border-color: var(--border-sep);
+    }
+    .btn-outline:hover:not(:disabled) {
+      background-color: var(--bg-neutral);
+      border-color: var(--text-secondary);
+    }
+
+    .btn-danger-outline {
+      background-color: #FFFFFF;
+      color: var(--status-error);
+      border-color: var(--status-error-border);
+    }
+    .btn-danger-outline:hover:not(:disabled) {
+      background-color: var(--status-error-bg);
+      border-color: var(--status-error);
+    }
+
+    /* Main Layout Container */
+    .main-container {
+      max-width: 1440px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 1.25rem 1.5rem 2.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+      flex: 1;
+    }
+
+    /* B. Safety and Demonstration Banner */
+    .safety-banner {
+      background-color: var(--teal-light);
+      border: 1.5px solid var(--teal-border);
+      border-left: 5px solid var(--teal-primary);
+      border-radius: var(--radius-md);
+      padding: 0.875rem 1.15rem;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .safety-banner-content {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+
+    .safety-banner-title {
+      font-size: 0.85rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      color: var(--teal-primary);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .safety-banner-text {
+      font-size: 0.84rem;
+      color: var(--text-primary);
+    }
+
+    .webserial-alert {
+      background-color: var(--status-error-bg);
+      border: 1.5px solid var(--status-error-border);
+      border-left: 5px solid var(--status-error);
+      border-radius: var(--radius-md);
+      padding: 0.85rem 1.15rem;
+      color: var(--status-error);
+      font-size: 0.85rem;
+      font-weight: 600;
+      display: none;
+    }
+
+    /* Stale / Fault Banner */
+    .stale-alert {
+      background-color: var(--status-warning-bg);
+      border: 1.5px solid var(--status-warning-border);
+      border-left: 5px solid var(--status-warning);
+      border-radius: var(--radius-md);
+      padding: 0.75rem 1.15rem;
+      color: var(--status-warning);
+      font-size: 0.84rem;
+      font-weight: 600;
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    /* D. Live Metrics Grid */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 0.875rem;
+    }
+
+    .metric-card {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-sep);
+      border-top: 3px solid var(--teal-primary);
+      border-radius: var(--radius-md);
+      padding: 0.875rem 1rem;
+      box-shadow: var(--shadow-card);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 0.35rem;
+      transition: opacity 0.2s ease;
+    }
+
+    .metric-card.is-stale {
+      border-top-color: var(--status-warning);
+      background-color: #FFFDF7;
+    }
+
+    .metric-label {
+      font-size: 0.74rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .metric-value {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      font-family: var(--font-mono);
+      word-break: break-word;
+    }
+
+    .metric-sub {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+
+    /* Main Workspace Grid: Left = T-Junction + Signal Panels, Right = Controls */
+    .workspace-grid {
+      display: grid;
+      grid-template-columns: 1.55fr 1fr;
+      gap: 1.25rem;
+      align-items: start;
+    }
+
+    @media (max-width: 1080px) {
+      .workspace-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-sep);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-card);
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 0.875rem 1.25rem;
+      border-bottom: 1px solid var(--border-sep);
+      background-color: var(--bg-surface);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+
+    .card-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .card-title-accent {
+      width: 4px;
+      height: 16px;
+      border-radius: 2px;
+      background-color: var(--teal-primary);
+      display: inline-block;
+    }
+
+    .card-subtitle {
+      font-size: 0.775rem;
+      color: var(--text-secondary);
+    }
+
+    .card-body {
+      padding: 1.25rem;
+    }
+
+    /* C. T-Junction SVG Container */
+    .junction-wrapper {
+      position: relative;
+      background-color: var(--bg-neutral);
+      border: 1px solid var(--border-sep);
+      border-radius: var(--radius-md);
+      padding: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .junction-svg {
+      width: 100%;
+      max-width: 780px;
+      height: auto;
+      display: block;
+      border-radius: 6px;
+      background-color: #F8FAFC;
+      border: 1px solid var(--border-sep);
+    }
+
+    .junction-status-overlay {
+      width: 100%;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      padding: 0.25rem 0.4rem 0;
+    }
+
+    /* SVG Signal Lamp Styling */
+    .svg-lamp {
+      fill: var(--sig-off);
+      stroke: #94A3B8;
+      stroke-width: 1.5px;
+      transition: fill 0.12s ease, filter 0.12s ease;
+    }
+    .svg-lamp.active-red {
+      fill: var(--sig-red-on);
+      stroke: #991B1B;
+      filter: drop-shadow(0 0 6px var(--sig-red-glow));
+    }
+    .svg-lamp.active-yellow {
+      fill: var(--sig-yellow-on);
+      stroke: #854D0E;
+      filter: drop-shadow(0 0 6px var(--sig-yellow-glow));
+    }
+    .svg-lamp.active-green {
+      fill: var(--sig-green-on);
+      stroke: #166534;
+      filter: drop-shadow(0 0 6px var(--sig-green-glow));
+    }
+
+    /* Decorative Vehicle Subtle Motion (respects prefers-reduced-motion) */
+    @keyframes flowEast {
+      0% { transform: translateX(-18px); opacity: 0.85; }
+      50% { transform: translateX(18px); opacity: 1; }
+      100% { transform: translateX(-18px); opacity: 0.85; }
+    }
+    @keyframes flowWest {
+      0% { transform: translateX(18px); opacity: 0.85; }
+      50% { transform: translateX(-18px); opacity: 1; }
+      100% { transform: translateX(18px); opacity: 0.85; }
+    }
+    @keyframes flowNorth {
+      0% { transform: translateY(12px); opacity: 0.85; }
+      50% { transform: translateY(-12px); opacity: 1; }
+      100% { transform: translateY(12px); opacity: 0.85; }
+    }
+
+    .veh-moving-east {
+      animation: flowEast 3.2s ease-in-out infinite;
+    }
+    .veh-moving-west {
+      animation: flowWest 3.2s ease-in-out infinite;
+    }
+    .veh-moving-north {
+      animation: flowNorth 2.8s ease-in-out infinite;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .veh-moving-east,
+      .veh-moving-west,
+      .veh-moving-north {
+        animation: none !important;
+      }
+    }
+
+    /* E. Traffic Signal Status Panel */
+    .signal-groups-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.875rem;
+      margin-top: 1rem;
+    }
+
+    @media (max-width: 680px) {
+      .signal-groups-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .signal-group-box {
+      border: 1px solid var(--border-sep);
+      border-radius: var(--radius-md);
+      background-color: var(--bg-surface);
+      padding: 0.875rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+    }
+
+    .signal-group-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border-sep);
+      padding-bottom: 0.45rem;
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .signal-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      padding: 0.35rem 0.5rem;
+      border-radius: 6px;
+      background-color: var(--bg-neutral);
+      border: 1px solid var(--border-sep);
+    }
+
+    .signal-row-left {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+
+    .lamp-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background-color: var(--sig-off);
+      border: 1.5px solid #94A3B8;
+      flex-shrink: 0;
+    }
+
+    .lamp-dot.on-red {
+      background-color: var(--sig-red-on);
+      border-color: #991B1B;
+      box-shadow: 0 0 8px var(--sig-red-glow);
+    }
+    .lamp-dot.on-yellow {
+      background-color: var(--sig-yellow-on);
+      border-color: #854D0E;
+      box-shadow: 0 0 8px var(--sig-yellow-glow);
+    }
+    .lamp-dot.on-green {
+      background-color: var(--sig-green-on);
+      border-color: #166534;
+      box-shadow: 0 0 8px var(--sig-green-glow);
+    }
+
+    .signal-name {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .signal-pin {
+      font-size: 0.7rem;
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+    }
+
+    .signal-state-pill {
+      font-size: 0.72rem;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+      background-color: #FFFFFF;
+      color: var(--text-secondary);
+      border: 1px solid var(--border-sep);
+    }
+
+    .signal-state-pill.is-on {
+      background-color: var(--teal-light);
+      color: var(--teal-primary);
+      border-color: var(--teal-border);
+    }
+
+    .logical-disclaimer {
+      margin-top: 0.85rem;
+      padding: 0.55rem 0.75rem;
+      border-radius: var(--radius-md);
+      background-color: var(--bg-neutral);
+      border: 1px solid var(--border-sep);
+      font-size: 0.76rem;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    /* F. Simulation & Demonstration Controls */
+    .control-section {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .control-group {
+      border: 1px solid var(--border-sep);
+      border-radius: var(--radius-md);
+      padding: 0.9rem;
+      background-color: var(--bg-surface);
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+    }
+
+    .control-group-title {
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--teal-primary);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .control-grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.6rem;
+    }
+
+    @media (max-width: 480px) {
+      .control-grid-2 {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .mode-lock-notice {
+      background-color: var(--teal-light);
+      border: 1px solid var(--teal-border);
+      color: var(--teal-primary);
+      border-radius: 6px;
+      padding: 0.55rem 0.75rem;
+      font-size: 0.78rem;
+      font-weight: 500;
+    }
+
+    .command-feedback {
+      padding: 0.65rem 0.85rem;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-sep);
+      background-color: var(--bg-neutral);
+      font-size: 0.8rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+
+    .command-feedback[data-kind="success"] {
+      background-color: var(--status-success-bg);
+      border-color: var(--status-success-border);
+      color: var(--status-success);
+    }
+    .command-feedback[data-kind="error"] {
+      background-color: var(--status-error-bg);
+      border-color: var(--status-error-border);
+      color: var(--status-error);
+    }
+    .command-feedback[data-kind="pending"] {
+      background-color: var(--teal-light);
+      border-color: var(--teal-border);
+      color: var(--teal-primary);
+    }
+
+    /* Reset Confirmation Box */
+    .reset-confirm-box {
+      display: none;
+      margin-top: 0.4rem;
+      padding: 0.75rem;
+      border-radius: 6px;
+      background-color: var(--status-warning-bg);
+      border: 1px solid var(--status-warning-border);
+      color: var(--text-primary);
+      font-size: 0.8rem;
+      flex-direction: column;
+      gap: 0.6rem;
+    }
+    .reset-confirm-box.is-open {
+      display: flex;
+    }
+
+    /* G. Collapsible Serial Console */
+    .console-details summary {
+      list-style: none;
+      cursor: pointer;
+      user-select: none;
+    }
+    .console-details summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .console-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .console-log {
+      background-color: var(--bg-neutral);
+      border: 1px solid var(--border-sep);
+      border-radius: var(--radius-md);
+      height: 250px;
+      overflow-y: auto;
+      padding: 0.75rem;
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+    }
+
+    .log-entry {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+
+    .log-time {
+      color: var(--text-secondary);
+      font-size: 0.72rem;
+      flex-shrink: 0;
+    }
+
+    .log-tag {
+      font-size: 0.68rem;
+      font-weight: 700;
+      padding: 0.05rem 0.35rem;
+      border-radius: 3px;
+      flex-shrink: 0;
+      text-transform: uppercase;
+    }
+
+    .log-entry.tx {
+      background-color: var(--teal-light);
+      border-left: 3px solid var(--teal-primary);
+    }
+    .log-entry.tx .log-tag {
+      background-color: var(--teal-primary);
+      color: #FFFFFF;
+    }
+
+    .log-entry.rx-transition {
+      background-color: #FFFFFF;
+      border-left: 3px solid var(--teal-muted);
+    }
+    .log-entry.rx-transition .log-tag {
+      background-color: var(--teal-light);
+      color: var(--teal-primary);
+      border: 1px solid var(--teal-border);
+    }
+
+    .log-entry.rx-event {
+      background-color: #FFFFFF;
+      border-left: 3px solid var(--status-success);
+    }
+    .log-entry.rx-event .log-tag {
+      background-color: var(--status-success-bg);
+      color: var(--status-success);
+    }
+
+    .log-entry.rx-reject,
+    .log-entry.sys-err {
+      background-color: var(--status-error-bg);
+      border-left: 3px solid var(--status-error);
+      color: var(--status-error);
+    }
+    .log-entry.rx-reject .log-tag,
+    .log-entry.sys-err .log-tag {
+      background-color: var(--status-error);
+      color: #FFFFFF;
+    }
+
+    .log-entry.sys-info {
+      background-color: #FFFFFF;
+      border-left: 3px solid var(--text-secondary);
+    }
+    .log-entry.sys-info .log-tag {
+      background-color: var(--border-sep);
+      color: var(--text-primary);
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- A. HEADER -->
+  <header class="app-header" role="banner">
+    <div class="header-inner">
+      <div class="brand-group">
+        <div class="brand-mark" aria-hidden="true">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="7" y="2" width="10" height="20" rx="2"></rect>
+            <circle cx="12" cy="7" r="1.5"></circle>
+            <circle cx="12" cy="12" r="1.5"></circle>
+            <circle cx="12" cy="17" r="1.5"></circle>
+          </svg>
+        </div>
+        <div>
+          <h1 class="brand-title">SMART TRAFFIC CONTROL</h1>
+          <p class="brand-subtitle">ESP32 Traffic Management Dashboard</p>
+        </div>
+      </div>
+
+      <div class="header-controls" role="region" aria-label="Connection and Telemetry Controls">
+        <div id="connBadge" class="badge" data-status="DISCONNECTED" role="status" aria-live="polite">
+          <span class="badge-dot" aria-hidden="true"></span>
+          <span id="connBadgeText">DISCONNECTED</span>
+        </div>
+
+        <div id="modeBadge" class="badge badge-mode" data-mode="UNKNOWN" role="status" aria-live="polite">
+          <span>MODE:</span>
+          <span id="modeBadgeText">N/A</span>
+        </div>
+
+        <div class="telemetry-timestamp" title="Last authoritative STATUS telemetry received from ESP32">
+          Last Update: <span id="lastTelemetryTime">N/A</span>
+        </div>
+
+        <button id="btnConnect" type="button" class="btn btn-primary">
+          Connect ESP32
+        </button>
+        <button id="btnDisconnect" type="button" class="btn btn-outline" disabled>
+          Disconnect
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-container" role="main">
+
+    <!-- Web Serial Availability Warning (shown only if navigator.serial is missing) -->
+    <div id="webSerialUnsupported" class="webserial-alert" role="alert">
+      Web Serial API is unavailable in this browser context. Please open this file in the latest Microsoft Edge or Google Chrome on Windows (desktop) to connect directly to the ESP32 over USB Serial.
+    </div>
+
+    <!-- B. SAFETY AND DEMONSTRATION BANNER (Always visible) -->
+    <section class="safety-banner" aria-label="Safety and Hardware Validation Notice">
+      <div class="safety-banner-content">
+        <div class="safety-banner-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+            <line x1="12" y1="9" x2="12" y2="13"></line>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+          <span>SOFTWARE DEMONSTRATION &amp; LIVE SERIAL TELEMETRY</span>
+        </div>
+        <p id="safetyBannerText" class="safety-banner-text">
+          Signal indications represent logical outputs reported by the ESP32. Physical LEDs, the GPIO 33 IR sensor, and the GPIO 32 pedestrian button have not been physically validated.
+        </p>
+      </div>
+      <div class="badge" style="background:#FFFFFF; border-color:var(--teal-border); color:var(--teal-primary);">
+        115200 Baud &bull; Authoritative FSM
+      </div>
+    </section>
+
+    <!-- Stale / Fault Alert Banner -->
+    <div id="staleAlertBanner" class="stale-alert" role="alert">
+      <span id="staleAlertText">Telemetry is stale: No valid STATUS response received from the ESP32 recently. Displayed values reflect the last known snapshot.</span>
+      <button id="btnRetryStatus" type="button" class="btn btn-secondary" style="padding:0.3rem 0.65rem; font-size:0.76rem;">
+        Poll STATUS Now
+      </button>
+    </div>
+
+    <!-- D. LIVE METRICS (8 Cards strictly backed by firmware STATUS response) -->
+    <section aria-label="Live Controller Metrics">
+      <div id="metricsGrid" class="metrics-grid">
+        <article class="metric-card" id="cardFsmState">
+          <div class="metric-label">
+            <span>1. Current FSM State</span>
+            <span id="metricNextTarget" style="color:var(--teal-primary); font-weight:600;">Next: N/A</span>
+          </div>
+          <div class="metric-value" id="metricFsmState">N/A</div>
+          <div class="metric-sub" id="metricTimestampSub">ESP32 Uptime: N/A</div>
+        </article>
+
+        <article class="metric-card" id="cardOpMode">
+          <div class="metric-label">
+            <span>2. Operating Mode</span>
+          </div>
+          <div class="metric-value" id="metricOpMode">N/A</div>
+          <div class="metric-sub" id="metricOpModeSub">Disconnected</div>
+        </article>
+
+        <article class="metric-card" id="cardStateElapsed">
+          <div class="metric-label">
+            <span>3. State Elapsed Time</span>
+          </div>
+          <div class="metric-value" id="metricStateElapsed">N/A</div>
+          <div class="metric-sub" id="metricPhaseRefSub">Configured Ref: N/A</div>
+        </article>
+
+        <article class="metric-card" id="cardSideGap">
+          <div class="metric-label">
+            <span>4. Side-Gap Timer</span>
+          </div>
+          <div class="metric-value" id="metricSideGap">N/A</div>
+          <div class="metric-sub" id="metricSideGapSub">Reported during SIDE_GREEN</div>
+        </article>
+
+        <article class="metric-card" id="cardSideDemand">
+          <div class="metric-label">
+            <span>5. Side-Road Demand</span>
+          </div>
+          <div class="metric-value" id="metricSideDemand">N/A</div>
+          <div class="metric-sub" id="metricSideDemandSub">SimVeh: N/A | HwLatched: N/A</div>
+        </article>
+
+        <article class="metric-card" id="cardPedDemand">
+          <div class="metric-label">
+            <span>6. Pedestrian Demand</span>
+          </div>
+          <div class="metric-value" id="metricPedDemand">N/A</div>
+          <div class="metric-sub" id="metricPedDemandSub">Crossing Request Latch</div>
+        </article>
+
+        <article class="metric-card" id="cardIrValid">
+          <div class="metric-label">
+            <span>7. Physical IR Validation</span>
+          </div>
+          <div class="metric-value" id="metricIrValid">N/A</div>
+          <div class="metric-sub" id="metricIrValidSub">GPIO 33 Hardware Status</div>
+        </article>
+
+        <article class="metric-card" id="cardSerialHealth">
+          <div class="metric-label">
+            <span>8. Serial Connection Health</span>
+          </div>
+          <div class="metric-value" id="metricSerialHealth">DISCONNECTED</div>
+          <div class="metric-sub" id="metricPortInfo">Port: Not Selected</div>
+        </article>
+      </div>
+    </section>
+
+    <!-- MAIN WORKSPACE GRID -->
+    <div class="workspace-grid">
+
+      <!-- LEFT COLUMN: C. T-Junction Visualization + E. Traffic Signal Status Panel -->
+      <div style="display:flex; flex-direction:column; gap:1.25rem;">
+        <section class="card" aria-labelledby="junctionHeading">
+          <div class="card-header">
+            <div>
+              <h2 id="junctionHeading" class="card-title">
+                <span class="card-title-accent" aria-hidden="true"></span>
+                Three-Way T-Junction Live Visualization
+              </h2>
+              <p class="card-subtitle">Driven strictly by authoritative ESP32 logical output telemetry</p>
+            </div>
+            <div class="badge" id="junctionTelemetryBadge" style="background:var(--bg-neutral);">
+              STATE: <span id="junctionStateLabel">DISCONNECTED</span>
+            </div>
+          </div>
+
+          <div class="card-body">
+            <div class="junction-wrapper">
+              <svg class="junction-svg" viewBox="0 0 760 440" role="img" aria-label="Top-down three-way T-junction traffic signal diagram">
+                <title>Three-Way T-Junction Traffic Signal Diagram</title>
+                <desc>Top-down view showing Main Road East-West approaches, Side Road South T-stem approach, Pedestrian crosswalk on East side, and live Red/Yellow/Green/Walk indicators.</desc>
+
+                <!-- Background Landscape -->
+                <rect x="0" y="0" width="760" height="440" fill="#F8FAFC" />
+
+                <!-- Subtle Teal Grid Accent Corners -->
+                <rect x="14" y="14" width="216" height="106" rx="8" fill="#F0FDFA" stroke="#99F6E4" stroke-width="1.5" />
+                <text x="28" y="38" fill="#0F766E" font-size="11" font-weight="700" font-family="Segoe UI, sans-serif">INTERSECTION TOPOLOGY</text>
+                <text x="28" y="56" fill="#17212B" font-size="11" font-weight="600" font-family="Segoe UI, sans-serif">Main Road: Approaches A &amp; B (Sync)</text>
+                <text x="28" y="74" fill="#17212B" font-size="11" font-weight="600" font-family="Segoe UI, sans-serif">Side Road: Approach C (T-Stem)</text>
+                <text x="28" y="92" fill="#64748B" font-size="10.5" font-family="Consolas, monospace" id="svgSubStatusText">Telemetry: Disconnected (All Lamps Off)</text>
+
+                <!-- Road Surfaces -->
+                <!-- Main Road Horizontal (Y: 130 to 260) -->
+                <rect x="0" y="130" width="760" height="130" fill="#334155" />
+                <!-- Side Road Vertical Stem (X: 310 to 450, Y: 260 to 440) -->
+                <rect x="310" y="260" width="140" height="180" fill="#334155" />
+
+                <!-- Road Shoulders / Curbs -->
+                <line x1="0" y1="130" x2="760" y2="130" stroke="#94A3B8" stroke-width="4" />
+                <line x1="0" y1="260" x2="310" y2="260" stroke="#94A3B8" stroke-width="4" />
+                <line x1="450" y1="260" x2="760" y2="260" stroke="#94A3B8" stroke-width="4" />
+                <line x1="310" y1="260" x2="310" y2="440" stroke="#94A3B8" stroke-width="4" />
+                <line x1="450" y1="260" x2="450" y2="440" stroke="#94A3B8" stroke-width="4" />
+
+                <!-- Lane Dividers -->
+                <!-- Main Road West Centerline -->
+                <line x1="15" y1="195" x2="285" y2="195" stroke="#F8FAFC" stroke-width="2.5" stroke-dasharray="14 10" />
+                <!-- Main Road East Centerline -->
+                <line x1="515" y1="195" x2="745" y2="195" stroke="#F8FAFC" stroke-width="2.5" stroke-dasharray="14 10" />
+                <!-- Side Road South Centerline -->
+                <line x1="380" y1="295" x2="380" y2="430" stroke="#F8FAFC" stroke-width="2.5" stroke-dasharray="12 10" />
+
+                <!-- Stop Lines -->
+                <!-- Westbound Stop Line (East Side, before crosswalk) -->
+                <line x1="510" y1="132" x2="510" y2="194" stroke="#FFFFFF" stroke-width="5" />
+                <!-- Eastbound Stop Line (West Side) -->
+                <line x1="290" y1="196" x2="290" y2="258" stroke="#FFFFFF" stroke-width="5" />
+                <!-- Side Road Northbound Stop Line -->
+                <line x1="381" y1="285" x2="448" y2="285" stroke="#FFFFFF" stroke-width="5" />
+
+                <!-- Pedestrian Crosswalk (East side of junction: X=466..498, Y=134..256) -->
+                <g id="svgCrosswalk" opacity="0.92">
+                  <rect x="468" y="136" width="28" height="12" rx="2" fill="#E2E8F0" />
+                  <rect x="468" y="156" width="28" height="12" rx="2" fill="#E2E8F0" />
+                  <rect x="468" y="176" width="28" height="12" rx="2" fill="#E2E8F0" />
+                  <rect x="468" y="196" width="28" height="12" rx="2" fill="#E2E8F0" />
+                  <rect x="468" y="216" width="28" height="12" rx="2" fill="#E2E8F0" />
+                  <rect x="468" y="236" width="28" height="12" rx="2" fill="#E2E8F0" />
+                </g>
+
+                <!-- Approach Direction Arrows & Labels -->
+                <!-- Main Road Westbound (Top Lane) -->
+                <g fill="#94A3B8">
+                  <path d="M 620 162 L 580 162 M 580 162 L 590 156 M 580 162 L 590 168" stroke="#CBD5E1" stroke-width="2.5" stroke-linecap="round" />
+                  <text x="640" y="166" fill="#E2E8F0" font-size="11" font-weight="600" font-family="Segoe UI, sans-serif">MAIN WESTBOUND</text>
+                </g>
+                <!-- Main Road Eastbound (Bottom Lane) -->
+                <g fill="#94A3B8">
+                  <path d="M 140 228 L 180 228 M 180 228 L 170 222 M 180 228 L 170 234" stroke="#CBD5E1" stroke-width="2.5" stroke-linecap="round" />
+                  <text x="24" y="232" fill="#E2E8F0" font-size="11" font-weight="600" font-family="Segoe UI, sans-serif">MAIN EASTBOUND</text>
+                </g>
+                <!-- Side Road Northbound (Right Lane of Stem) -->
+                <g fill="#94A3B8">
+                  <path d="M 415 385 L 415 345 M 415 345 L 409 355 M 415 345 L 421 355" stroke="#CBD5E1" stroke-width="2.5" stroke-linecap="round" />
+                  <text x="320" y="424" fill="#E2E8F0" font-size="10.5" font-weight="600" font-family="Segoe UI, sans-serif">SIDE ROAD (STEM)</text>
+                </g>
+
+                <!-- Decorative Vehicle Illustrations (Driven by active state & demand) -->
+                <!-- Main Road Eastbound Car -->
+                <g id="svgCarMainEast" style="display:none;">
+                  <rect x="205" y="214" width="46" height="24" rx="5" fill="#0F766E" stroke="#FFFFFF" stroke-width="1.5" />
+                  <rect x="216" y="217" width="22" height="18" rx="3" fill="#5EEAD4" />
+                </g>
+                <!-- Main Road Westbound Car -->
+                <g id="svgCarMainWest" style="display:none;">
+                  <rect x="528" y="150" width="46" height="24" rx="5" fill="#0F766E" stroke="#FFFFFF" stroke-width="1.5" />
+                  <rect x="540" y="153" width="22" height="18" rx="3" fill="#5EEAD4" />
+                </g>
+                <!-- Side Road Waiting / Moving Vehicle (Shown when Side Demand PENDING or SIDE_GREEN) -->
+                <g id="svgCarSideRoad" style="display:none;">
+                  <rect x="403" y="302" width="26" height="46" rx="5" fill="#D97706" stroke="#FFFFFF" stroke-width="1.5" />
+                  <rect x="406" y="312" width="20" height="22" rx="3" fill="#FDE68A" />
+                  <text x="416" y="362" text-anchor="middle" fill="#FFFBEB" font-size="9.5" font-weight="700" font-family="Consolas, monospace">DEMAND</text>
+                </g>
+
+                <!-- Side-Road IR Sensor Zone Indicator (GPIO 33) -->
+                <rect id="svgIrZone" x="386" y="294" width="58" height="62" rx="4" fill="none" stroke="#5EEAD4" stroke-width="1.5" stroke-dasharray="4 3" />
+                <text x="460" y="405" fill="#0F766E" font-size="10.5" font-weight="700" font-family="Consolas, monospace">IR SENSOR ZONE (GPIO 33)</text>
+                <text x="460" y="420" fill="#64748B" font-size="10" font-family="Segoe UI, sans-serif" id="svgIrZoneStatus">Demand: N/A | HwValid: NO</text>
+
+                <!-- ============================================================ -->
+                <!-- SIGNAL HEAD 1: MAIN ROAD WEST (Eastbound Approach A)         -->
+                <!-- ============================================================ -->
+                <g transform="translate(215, 274)">
+                  <rect x="0" y="0" width="84" height="54" rx="6" fill="#FFFFFF" stroke="#17212B" stroke-width="1.5" />
+                  <text x="42" y="14" text-anchor="middle" fill="#17212B" font-size="9.5" font-weight="800" font-family="Segoe UI, sans-serif">MAIN ROAD (A)</text>
+                  <circle id="svgMainWestRed" class="svg-lamp" cx="18" cy="34" r="9.5" />
+                  <circle id="svgMainWestYellow" class="svg-lamp" cx="42" cy="34" r="9.5" />
+                  <circle id="svgMainWestGreen" class="svg-lamp" cx="66" cy="34" r="9.5" />
+                  <text x="18" y="50" text-anchor="middle" fill="#64748B" font-size="7.5" font-weight="700">R</text>
+                  <text x="42" y="50" text-anchor="middle" fill="#64748B" font-size="7.5" font-weight="700">Y</text>
+                  <text x="66" y="50" text-anchor="middle" fill="#64748B" font-size="7.5" font-weight="700">G</text>
+                </g>
+
+                <!-- ============================================================ -->
+                <!-- SIGNAL HEAD 2: MAIN ROAD EAST (Westbound Approach B)         -->
+                <!-- ============================================================ -->
+                <g transform="translate(520, 62)">
+                  <rect x="0" y="0" width="84" height="54" rx="6" fill="#FFFFFF" stroke="#17212B" stroke-width="1.5" />
+                  <text x="42" y="14" text-anchor="middle" fill="#17212B" font-size="9.5" font-weight="800" font-family="Segoe UI, sans-serif">MAIN ROAD (B)</text>
+                  <circle id="svgMainEastRed" class="svg-lamp" cx="18" cy="34" r="9.5" />
+                  <circle id="svgMainEastYellow" class="svg-lamp" cx="42" cy="34" r="9.5" />
+                  <circle id="svgMainEastGreen" class="svg-lamp" cx="66" cy="34" r="9.5" />
+                  <text x="18" y="50" text-anchor="middle" fill="#64748B" font-size="7.5" font-weight="700">R</text>
+                  <text x="42" y="50" text-anchor="middle" fill="#64748B" font-size="7.5" font-weight="700">Y</text>
+                  <text x="66" y="50" text-anchor="middle" fill="#64748B" font-size="7.5" font-weight="700">G</text>
+                </g>
+
+                <!-- ============================================================ -->
+                <!-- SIGNAL HEAD 3: SIDE ROAD (T-Stem Approach C)                 -->
+                <!-- ============================================================ -->
+                <g transform="translate(212, 348)">
+                  <rect x="0" y="0" width="86" height="54" rx="6" fill="#FFFFFF" stroke="#17212B" stroke-width="1.5" />
+                  <text x="43" y="14" text-anchor="middle" fill="#17212B" font-size="9.5" font-weight="800" font-family="Segoe UI, sans-serif">SIDE ROAD (C)</text>
+                  <circle id="svgSideRed" class="svg-lamp" cx="18" cy="34" r="9.5" />
+                  <circle id="svgSideYellow" class="svg-lamp" cx="43" cy="34" r="9.5" />
+                  <circle id="svgSideGreen" class="svg-lamp" cx="68" cy="34" r="9.5" />
+                  <text x="18" y="50" text-anchor="middle" fill="#64748B" font-size="7.5" font-weight="700">R</text>
+                  <text x="43" y="50" text-anchor="middle" fill="#64748B" font-size="7.5" font-weight="700">Y</text>
+                  <text x="68" y="50" text-anchor="middle" fill="#64748B" font-size="7.5" font-weight="700">G</text>
+                </g>
+
+                <!-- ============================================================ -->
+                <!-- SIGNAL HEAD 4: PEDESTRIAN CROSSING INDICATORS                -->
+                <!-- ============================================================ -->
+                <g transform="translate(460, 274)">
+                  <rect x="0" y="0" width="148" height="62" rx="6" fill="#FFFFFF" stroke="#0F766E" stroke-width="1.5" />
+                  <text x="74" y="14" text-anchor="middle" fill="#0F766E" font-size="9.5" font-weight="800" font-family="Segoe UI, sans-serif">PEDESTRIAN SIGNALS</text>
+                  <!-- DONT WALK Indicator -->
+                  <circle id="svgPedDontWalk" class="svg-lamp" cx="38" cy="35" r="10" />
+                  <text x="38" y="55" text-anchor="middle" fill="#17212B" font-size="8" font-weight="700">DON'T WALK</text>
+                  <!-- WALK Indicator -->
+                  <circle id="svgPedWalk" class="svg-lamp" cx="110" cy="35" r="10" />
+                  <text x="110" y="55" text-anchor="middle" fill="#17212B" font-size="8" font-weight="700">WALK</text>
+                </g>
+
+                <!-- Pedestrian Button Call Box Label -->
+                <g transform="translate(620, 274)">
+                  <rect x="0" y="0" width="122" height="62" rx="6" fill="#F0FDFA" stroke="#99F6E4" stroke-width="1.5" />
+                  <text x="61" y="16" text-anchor="middle" fill="#0F766E" font-size="9.5" font-weight="800" font-family="Segoe UI, sans-serif">PED PUSH-BUTTON</text>
+                  <text x="61" y="32" text-anchor="middle" fill="#17212B" font-size="9.5" font-family="Consolas, monospace">GPIO 32 (PULLUP)</text>
+                  <text x="61" y="49" text-anchor="middle" fill="#64748B" font-size="9.5" font-weight="700" id="svgPedLatchText">Latch: N/A</text>
+                </g>
+              </svg>
+
+              <div class="junction-status-overlay">
+                <span><strong>Intersection Safety Invariant:</strong> Conflicting greens and vehicle green during PED_WALK are prevented by the ESP32 FSM.</span>
+                <span id="svgFreshnessTag">Telemetry Status: Disconnected</span>
+              </div>
+            </div>
+
+            <!-- E. TRAFFIC SIGNAL STATUS PANEL -->
+            <div class="signal-groups-grid" role="region" aria-label="Logical Traffic Signal Outputs">
+              <!-- Main Road Group -->
+              <div class="signal-group-box">
+                <div class="signal-group-header">
+                  <span>Main Road Signals</span>
+                  <span class="signal-pin">GPIOs 25, 26, 27</span>
+                </div>
+                <div class="signal-row" aria-label="Main Road Red Signal">
+                  <div class="signal-row-left">
+                    <span id="dotMainRed" class="lamp-dot" aria-hidden="true"></span>
+                    <div>
+                      <div class="signal-name">Red</div>
+                      <div class="signal-pin">GPIO 25 &bull; Stop</div>
+                    </div>
+                  </div>
+                  <span id="pillMainRed" class="signal-state-pill">OFF</span>
+                </div>
+                <div class="signal-row" aria-label="Main Road Yellow Signal">
+                  <div class="signal-row-left">
+                    <span id="dotMainYellow" class="lamp-dot" aria-hidden="true"></span>
+                    <div>
+                      <div class="signal-name">Yellow</div>
+                      <div class="signal-pin">GPIO 26 &bull; Clearance</div>
+                    </div>
+                  </div>
+                  <span id="pillMainYellow" class="signal-state-pill">OFF</span>
+                </div>
+                <div class="signal-row" aria-label="Main Road Green Signal">
+                  <div class="signal-row-left">
+                    <span id="dotMainGreen" class="lamp-dot" aria-hidden="true"></span>
+                    <div>
+                      <div class="signal-name">Green</div>
+                      <div class="signal-pin">GPIO 27 &bull; Priority Go</div>
+                    </div>
+                  </div>
+                  <span id="pillMainGreen" class="signal-state-pill">OFF</span>
+                </div>
+              </div>
+
+              <!-- Side Road Group -->
+              <div class="signal-group-box">
+                <div class="signal-group-header">
+                  <span>Side Road Signals</span>
+                  <span class="signal-pin">GPIOs 14, 12, 13</span>
+                </div>
+                <div class="signal-row" aria-label="Side Road Red Signal">
+                  <div class="signal-row-left">
+                    <span id="dotSideRed" class="lamp-dot" aria-hidden="true"></span>
+                    <div>
+                      <div class="signal-name">Red</div>
+                      <div class="signal-pin">GPIO 14 &bull; Stop</div>
+                    </div>
+                  </div>
+                  <span id="pillSideRed" class="signal-state-pill">OFF</span>
+                </div>
+                <div class="signal-row" aria-label="Side Road Yellow Signal">
+                  <div class="signal-row-left">
+                    <span id="dotSideYellow" class="lamp-dot" aria-hidden="true"></span>
+                    <div>
+                      <div class="signal-name">Yellow</div>
+                      <div class="signal-pin">GPIO 12 &bull; Clearance</div>
+                    </div>
+                  </div>
+                  <span id="pillSideYellow" class="signal-state-pill">OFF</span>
+                </div>
+                <div class="signal-row" aria-label="Side Road Green Signal">
+                  <div class="signal-row-left">
+                    <span id="dotSideGreen" class="lamp-dot" aria-hidden="true"></span>
+                    <div>
+                      <div class="signal-name">Green</div>
+                      <div class="signal-pin">GPIO 13 &bull; Actuated Go</div>
+                    </div>
+                  </div>
+                  <span id="pillSideGreen" class="signal-state-pill">OFF</span>
+                </div>
+              </div>
+
+              <!-- Pedestrian Group -->
+              <div class="signal-group-box">
+                <div class="signal-group-header">
+                  <span>Pedestrian Signals</span>
+                  <span class="signal-pin">GPIOs 19, 18</span>
+                </div>
+                <div class="signal-row" aria-label="Pedestrian WALK Signal">
+                  <div class="signal-row-left">
+                    <span id="dotPedWalk" class="lamp-dot" aria-hidden="true"></span>
+                    <div>
+                      <div class="signal-name">WALK</div>
+                      <div class="signal-pin">GPIO 19 &bull; Crossing Permitted</div>
+                    </div>
+                  </div>
+                  <span id="pillPedWalk" class="signal-state-pill">OFF</span>
+                </div>
+                <div class="signal-row" aria-label="Pedestrian DONT WALK Signal">
+                  <div class="signal-row-left">
+                    <span id="dotPedDontWalk" class="lamp-dot" aria-hidden="true"></span>
+                    <div>
+                      <div class="signal-name">DON'T WALK</div>
+                      <div class="signal-pin">GPIO 18 &bull; Do Not Cross</div>
+                    </div>
+                  </div>
+                  <span id="pillPedDontWalk" class="signal-state-pill">OFF</span>
+                </div>
+                <div style="font-size:0.73rem; color:var(--text-secondary); padding-top:0.2rem;">
+                  <strong style="color:var(--text-primary);">Raw Telemetry Vector:</strong>
+                  <div id="rawVectorDisplay" style="font-family:var(--font-mono); margin-top:0.15rem;">N/A</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="logical-disclaimer" role="note">
+              <span><strong>Output Verification Notice:</strong> Indicators above reflect logical firmware output states reported via Serial (`Logical Outputs`), not measured physical GPIO pin voltages.</span>
+              <span>Active-HIGH Logic (1 = ON, 0 = OFF)</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- RIGHT COLUMN: F. Simulation and Demonstration Controls -->
+      <div style="display:flex; flex-direction:column; gap:1.25rem;">
+        <section class="card" aria-labelledby="controlsHeading">
+          <div class="card-header">
+            <div>
+              <h2 id="controlsHeading" class="card-title">
+                <span class="card-title-accent" aria-hidden="true"></span>
+                Simulation &amp; Demonstration Controls
+              </h2>
+              <p class="card-subtitle">Commands are validated and executed by the ESP32 FSM over Serial</p>
+            </div>
+          </div>
+
+          <div class="card-body control-section">
+
+            <!-- Command Acknowledgement / Feedback Box -->
+            <div id="cmdFeedbackBox" class="command-feedback" data-kind="idle" role="status" aria-live="polite">
+              <div style="font-weight:700;" id="cmdFeedbackTitle">Ready (Disconnected)</div>
+              <div id="cmdFeedbackDetail">Connect to the ESP32 over Web Serial (115200 baud) to inspect live status and send commands.</div>
+            </div>
+
+            <!-- 1. Operating Mode Selection -->
+            <div class="control-group">
+              <div class="control-group-title">
+                <span>1. Controller Operating Mode</span>
+                <span id="ctrlModeStatusLabel" style="font-family:var(--font-mono); font-size:0.72rem;">Mode: N/A</span>
+              </div>
+              <p style="font-size:0.78rem; color:var(--text-secondary);">
+                The ESP32 defaults to <code>HARDWARE_READY</code>. Enable simulation explicitly to inject synthetic vehicle or pedestrian demands.
+              </p>
+              <div class="control-grid-2">
+                <button id="btnSimOn" type="button" class="btn btn-primary" disabled>
+                  Enable Simulation (SIM ON)
+                </button>
+                <button id="btnSimOff" type="button" class="btn btn-secondary" disabled>
+                  Disable Simulation (SIM OFF)
+                </button>
+              </div>
+            </div>
+
+            <!-- 2. Simulated Demand Injection -->
+            <div class="control-group">
+              <div class="control-group-title">
+                <span>2. Simulated Demand Injection</span>
+                <span style="font-family:var(--font-mono); font-size:0.72rem;">Requires SERIAL_SIMULATION</span>
+              </div>
+
+              <div id="simLockNotice" class="mode-lock-notice">
+                Simulation controls are locked until the ESP32 confirms <code>SERIAL_SIMULATION</code> mode is active.
+              </div>
+
+              <div class="control-grid-2">
+                <button id="btnVehicleOn" type="button" class="btn btn-primary" disabled>
+                  Simulate Vehicle Detected
+                </button>
+                <button id="btnVehicleOff" type="button" class="btn btn-secondary" disabled>
+                  Clear Simulated Vehicle
+                </button>
+                <button id="btnPedestrian" type="button" class="btn btn-primary" disabled>
+                  Request Pedestrian Crossing
+                </button>
+                <button id="btnClearSim" type="button" class="btn btn-outline" disabled>
+                  Clear Simulated Requests
+                </button>
+              </div>
+            </div>
+
+            <!-- 3. Controller Inspection & Reset -->
+            <div class="control-group">
+              <div class="control-group-title">
+                <span>3. Telemetry &amp; Controlled Logical Reset</span>
+                <span style="font-family:var(--font-mono); font-size:0.72rem;">Available in Any Mode</span>
+              </div>
+              <div class="control-grid-2">
+                <button id="btnRefreshStatus" type="button" class="btn btn-secondary" disabled>
+                  Refresh Status (STATUS)
+                </button>
+                <button id="btnAskReset" type="button" class="btn btn-danger-outline" disabled>
+                  Reset Controller (RESET)
+                </button>
+              </div>
+
+              <!-- Explicit Confirmation Dialog before sending RESET -->
+              <div id="resetConfirmBox" class="reset-confirm-box" role="region" aria-label="Confirm Controller Reset">
+                <div>
+                  <strong>Confirm Logical Reset:</strong> Send <code>RESET</code> to the ESP32? This clears pending demands and returns the controller to <code>STARTUP_SAFE &rarr; ALL_RED &rarr; MAIN_GREEN</code> without restarting the MCU.
+                </div>
+                <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+                  <button id="btnCancelReset" type="button" class="btn btn-outline" style="padding:0.35rem 0.75rem; font-size:0.78rem;">
+                    Cancel
+                  </button>
+                  <button id="btnConfirmReset" type="button" class="btn btn-danger-outline" style="padding:0.35rem 0.75rem; font-size:0.78rem; font-weight:700;">
+                    Confirm &amp; Send RESET
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Configured Firmware Reference Timings -->
+            <div class="control-group" style="background-color:var(--bg-neutral);">
+              <div class="control-group-title">
+                <span>Configured Demonstration Phase Timings</span>
+                <span style="font-family:var(--font-mono); font-size:0.7rem; color:var(--text-secondary);">TrafficConfig.h</span>
+              </div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.35rem 0.75rem; font-size:0.76rem; color:var(--text-secondary);">
+                <div>Startup Safe: <strong style="color:var(--text-primary);">1000 ms</strong></div>
+                <div>All-Red Clearance: <strong style="color:var(--text-primary);">1000 ms</strong></div>
+                <div>Main Min Green: <strong style="color:var(--text-primary);">4000 ms</strong></div>
+                <div>Main Yellow: <strong style="color:var(--text-primary);">2000 ms</strong></div>
+                <div>Side Min Green: <strong style="color:var(--text-primary);">2000 ms</strong></div>
+                <div>Side Max Green: <strong style="color:var(--text-primary);">8000 ms</strong></div>
+                <div>Side Clear Gap: <strong style="color:var(--text-primary);">2000 ms</strong></div>
+                <div>Side Yellow: <strong style="color:var(--text-primary);">2000 ms</strong></div>
+                <div style="grid-column:span 2;">Pedestrian WALK Phase: <strong style="color:var(--text-primary);">5000 ms</strong> (Bench Demo Only)</div>
+              </div>
+            </div>
+
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- G. COLLAPSIBLE SERIAL CONSOLE -->
+    <section class="card" aria-labelledby="consoleHeading">
+      <details class="console-details" open>
+        <summary class="card-header">
+          <div>
+            <h2 id="consoleHeading" class="card-title">
+              <span class="card-title-accent" aria-hidden="true"></span>
+              Live Serial Console &amp; Event Log
+            </h2>
+            <p class="card-subtitle">Displays commands sent, transition logs, event acknowledgements, and STATUS snapshots (Click header to collapse/expand)</p>
+          </div>
+          <div style="display:flex; align-items:center; gap:0.6rem;">
+            <span id="consoleCountBadge" class="badge" style="font-family:var(--font-mono);">0 / 250 entries</span>
+          </div>
+        </summary>
+
+        <div class="card-body">
+          <div class="console-toolbar">
+            <label style="display:inline-flex; align-items:center; gap:0.45rem; font-size:0.8rem; color:var(--text-secondary); cursor:pointer;">
+              <input type="checkbox" id="chkLogPollingStatus" />
+              <span>Include periodic <code>STATUS</code> blocks in console log (transitions &amp; events always shown)</span>
+            </label>
+            <div style="display:flex; gap:0.5rem;">
+              <button id="btnCopyConsole" type="button" class="btn btn-secondary" style="padding:0.35rem 0.75rem; font-size:0.78rem;">
+                Copy Console Text
+              </button>
+              <button id="btnClearConsole" type="button" class="btn btn-outline" style="padding:0.35rem 0.75rem; font-size:0.78rem;">
+                Clear Visible Console
+              </button>
+            </div>
+          </div>
+
+          <div id="consoleLog" class="console-log" role="log" aria-live="polite" aria-label="Serial Communication Log"></div>
+        </div>
+      </details>
+    </section>
+
+  </main>
+
+  <script>
+    (function () {
+      "use strict";
+
+      // ======================================================================
+      // CONSTANTS & FIRMWARE PROTOCOL DEFINITIONS
+      // ======================================================================
+      const SERIAL_BAUD = 115200;
+      const POLL_INTERVAL_MS = 650;      // Conservative serialized polling interval
+      const STATUS_TIMEOUT_MS = 1800;    // Timeout for an in-flight STATUS request
+      const STALE_THRESHOLD_MS = 2800;   // Mark telemetry stale if no valid STATUS for > 2.8s
+      const MAX_CONSOLE_ENTRIES = 250;   // Bounded log history
+
+      const PHASE_REF_TIMINGS = {
+        STARTUP_SAFE: "1000 ms (Startup Safe)",
+        ALL_RED: "1000 ms (All-Red Clearance)",
+        MAIN_GREEN: "4000 ms Min Green (Priority)",
+        MAIN_YELLOW: "2000 ms (Main Yellow)",
+        SIDE_GREEN: "2000 ms Min / 8000 ms Max / 2000 ms Gap",
+        SIDE_YELLOW: "2000 ms (Side Yellow)",
+        PED_WALK: "5000 ms (Pedestrian WALK)",
+        FAULT_SAFE: "All outputs LOW (Fault Lock)"
+      };
+
+      // ======================================================================
+      // APPLICATION STATE
+      // ======================================================================
+      let port = null;
+      let reader = null;
+      let writer = null;
+      let readLoopActive = false;
+      let isDisconnecting = false;
+
+      // Connection state: DISCONNECTED | CONNECTING | CONNECTED | SERIAL LOST | TELEMETRY STALE | ERROR
+      let connectionStatus = "DISCONNECTED";
+      let selectedPortLabel = "Not Selected";
+
+      // Serialized polling & command state
+      let pollTimerId = null;
+      let staleCheckTimerId = null;
+      let statusRequestInFlight = false;
+      let statusRequestSentAtMs = 0;
+      let statusRequestManual = false;
+      let pendingUserCommand = null; // { cmd, sentAtMs, timeoutId }
+
+      // Line buffer for incoming serial stream
+      let rxBuffer = "";
+      let inStatusBlock = false;
+      let currentStatusLines = [];
+      let statusAccumulator = null;
+
+      // Last authoritative telemetry parsed from ESP32 STATUS block
+      let lastValidTelemetry = null;
+      let lastTelemetryReceivedAtMs = 0;
+      let portOpenedAtMs = 0;
+      let detectedFirmwareVersion = null;
+
+      // Bounded console entries
+      const consoleEntries = [];
+
+      // ======================================================================
+      // DOM REFERENCES
+      // ======================================================================
+      const el = {
+        webSerialUnsupported: document.getElementById("webSerialUnsupported"),
+        connBadge: document.getElementById("connBadge"),
+        connBadgeText: document.getElementById("connBadgeText"),
+        modeBadge: document.getElementById("modeBadge"),
+        modeBadgeText: document.getElementById("modeBadgeText"),
+        lastTelemetryTime: document.getElementById("lastTelemetryTime"),
+        btnConnect: document.getElementById("btnConnect"),
+        btnDisconnect: document.getElementById("btnDisconnect"),
+        safetyBannerText: document.getElementById("safetyBannerText"),
+        staleAlertBanner: document.getElementById("staleAlertBanner"),
+        staleAlertText: document.getElementById("staleAlertText"),
+        btnRetryStatus: document.getElementById("btnRetryStatus"),
+
+        // Metrics
+        metricCards: document.querySelectorAll(".metric-card"),
+        metricFsmState: document.getElementById("metricFsmState"),
+        metricNextTarget: document.getElementById("metricNextTarget"),
+        metricTimestampSub: document.getElementById("metricTimestampSub"),
+        metricOpMode: document.getElementById("metricOpMode"),
+        metricOpModeSub: document.getElementById("metricOpModeSub"),
+        metricStateElapsed: document.getElementById("metricStateElapsed"),
+        metricPhaseRefSub: document.getElementById("metricPhaseRefSub"),
+        metricSideGap: document.getElementById("metricSideGap"),
+        metricSideGapSub: document.getElementById("metricSideGapSub"),
+        metricSideDemand: document.getElementById("metricSideDemand"),
+        metricSideDemandSub: document.getElementById("metricSideDemandSub"),
+        metricPedDemand: document.getElementById("metricPedDemand"),
+        metricPedDemandSub: document.getElementById("metricPedDemandSub"),
+        metricIrValid: document.getElementById("metricIrValid"),
+        metricIrValidSub: document.getElementById("metricIrValidSub"),
+        metricSerialHealth: document.getElementById("metricSerialHealth"),
+        metricPortInfo: document.getElementById("metricPortInfo"),
+
+        // SVG Junction elements
+        junctionStateLabel: document.getElementById("junctionStateLabel"),
+        svgSubStatusText: document.getElementById("svgSubStatusText"),
+        svgFreshnessTag: document.getElementById("svgFreshnessTag"),
+        svgIrZone: document.getElementById("svgIrZone"),
+        svgIrZoneStatus: document.getElementById("svgIrZoneStatus"),
+        svgPedLatchText: document.getElementById("svgPedLatchText"),
+        svgCarMainEast: document.getElementById("svgCarMainEast"),
+        svgCarMainWest: document.getElementById("svgCarMainWest"),
+        svgCarSideRoad: document.getElementById("svgCarSideRoad"),
+
+        svgMainWestRed: document.getElementById("svgMainWestRed"),
+        svgMainWestYellow: document.getElementById("svgMainWestYellow"),
+        svgMainWestGreen: document.getElementById("svgMainWestGreen"),
+        svgMainEastRed: document.getElementById("svgMainEastRed"),
+        svgMainEastYellow: document.getElementById("svgMainEastYellow"),
+        svgMainEastGreen: document.getElementById("svgMainEastGreen"),
+        svgSideRed: document.getElementById("svgSideRed"),
+        svgSideYellow: document.getElementById("svgSideYellow"),
+        svgSideGreen: document.getElementById("svgSideGreen"),
+        svgPedDontWalk: document.getElementById("svgPedDontWalk"),
+        svgPedWalk: document.getElementById("svgPedWalk"),
+
+        // Signal Status Panel
+        dotMainRed: document.getElementById("dotMainRed"),
+        dotMainYellow: document.getElementById("dotMainYellow"),
+        dotMainGreen: document.getElementById("dotMainGreen"),
+        pillMainRed: document.getElementById("pillMainRed"),
+        pillMainYellow: document.getElementById("pillMainYellow"),
+        pillMainGreen: document.getElementById("pillMainGreen"),
+
+        dotSideRed: document.getElementById("dotSideRed"),
+        dotSideYellow: document.getElementById("dotSideYellow"),
+        dotSideGreen: document.getElementById("dotSideGreen"),
+        pillSideRed: document.getElementById("pillSideRed"),
+        pillSideYellow: document.getElementById("pillSideYellow"),
+        pillSideGreen: document.getElementById("pillSideGreen"),
+
+        dotPedWalk: document.getElementById("dotPedWalk"),
+        dotPedDontWalk: document.getElementById("dotPedDontWalk"),
+        pillPedWalk: document.getElementById("pillPedWalk"),
+        pillPedDontWalk: document.getElementById("pillPedDontWalk"),
+        rawVectorDisplay: document.getElementById("rawVectorDisplay"),
+
+        // Controls
+        cmdFeedbackBox: document.getElementById("cmdFeedbackBox"),
+        cmdFeedbackTitle: document.getElementById("cmdFeedbackTitle"),
+        cmdFeedbackDetail: document.getElementById("cmdFeedbackDetail"),
+        ctrlModeStatusLabel: document.getElementById("ctrlModeStatusLabel"),
+        simLockNotice: document.getElementById("simLockNotice"),
+
+        btnSimOn: document.getElementById("btnSimOn"),
+        btnSimOff: document.getElementById("btnSimOff"),
+        btnVehicleOn: document.getElementById("btnVehicleOn"),
+        btnVehicleOff: document.getElementById("btnVehicleOff"),
+        btnPedestrian: document.getElementById("btnPedestrian"),
+        btnClearSim: document.getElementById("btnClearSim"),
+        btnRefreshStatus: document.getElementById("btnRefreshStatus"),
+        btnAskReset: document.getElementById("btnAskReset"),
+        resetConfirmBox: document.getElementById("resetConfirmBox"),
+        btnCancelReset: document.getElementById("btnCancelReset"),
+        btnConfirmReset: document.getElementById("btnConfirmReset"),
+
+        // Console
+        chkLogPollingStatus: document.getElementById("chkLogPollingStatus"),
+        btnCopyConsole: document.getElementById("btnCopyConsole"),
+        btnClearConsole: document.getElementById("btnClearConsole"),
+        consoleLog: document.getElementById("consoleLog"),
+        consoleCountBadge: document.getElementById("consoleCountBadge")
+      };
+
+      // ======================================================================
+      // CONSOLE LOGGING HELPER (BOUNDED)
+      // ======================================================================
+      function formatWallTime(dateObj) {
+        const hh = String(dateObj.getHours()).padStart(2, "0");
+        const mm = String(dateObj.getMinutes()).padStart(2, "0");
+        const ss = String(dateObj.getSeconds()).padStart(2, "0");
+        const ms = String(dateObj.getMilliseconds()).padStart(3, "0");
+        return `${hh}:${mm}:${ss}.${ms}`;
+      }
+
+      function appendConsole(category, tag, message) {
+        const timeStr = formatWallTime(new Date());
+        consoleEntries.push({ timeStr, category, tag, message });
+        while (consoleEntries.length > MAX_CONSOLE_ENTRIES) {
+          consoleEntries.shift();
+        }
+
+        const row = document.createElement("div");
+        row.className = `log-entry ${category}`;
+
+        const timeSpan = document.createElement("span");
+        timeSpan.className = "log-time";
+        timeSpan.textContent = `[${timeStr}]`;
+
+        const tagSpan = document.createElement("span");
+        tagSpan.className = "log-tag";
+        tagSpan.textContent = tag;
+
+        const msgSpan = document.createElement("span");
+        msgSpan.textContent = message;
+
+        row.appendChild(timeSpan);
+        row.appendChild(tagSpan);
+        row.appendChild(msgSpan);
+
+        el.consoleLog.appendChild(row);
+        while (el.consoleLog.childNodes.length > MAX_CONSOLE_ENTRIES) {
+          el.consoleLog.removeChild(el.consoleLog.firstChild);
+        }
+        el.consoleLog.scrollTop = el.consoleLog.scrollHeight;
+        el.consoleCountBadge.textContent = `${consoleEntries.length} / ${MAX_CONSOLE_ENTRIES} entries`;
+      }
+
+      function setCommandFeedback(kind, title, detail) {
+        el.cmdFeedbackBox.setAttribute("data-kind", kind);
+        el.cmdFeedbackTitle.textContent = title;
+        el.cmdFeedbackDetail.textContent = detail;
+      }
+
+      // ======================================================================
+      // UI RENDERING (STRICTLY DRIVEN BY AUTHORITATIVE TELEMETRY)
+      // ======================================================================
+      function setConnectionStatus(newStatus, portDetail) {
+        connectionStatus = newStatus;
+        if (portDetail) {
+          selectedPortLabel = portDetail;
+        }
+
+        el.connBadge.setAttribute("data-status", newStatus);
+        el.connBadgeText.textContent = newStatus;
+        el.metricSerialHealth.textContent = newStatus;
+        el.metricPortInfo.textContent = `Port: ${selectedPortLabel}`;
+
+        const isConnected = (newStatus === "CONNECTED" || newStatus === "TELEMETRY STALE");
+        const isConnecting = (newStatus === "CONNECTING");
+
+        el.btnConnect.disabled = isConnected || isConnecting || !("serial" in navigator);
+        el.btnDisconnect.disabled = !isConnected && !isConnecting;
+
+        if (newStatus === "TELEMETRY STALE") {
+          el.staleAlertBanner.style.display = "flex";
+          el.staleAlertText.textContent = lastValidTelemetry
+            ? "TELEMETRY STALE: Valid STATUS responses stopped arriving from the ESP32. Displayed metrics reflect the last verified snapshot."
+            : "NO FIRMWARE STATUS RECEIVED: Serial port is open, but the device has not returned a valid STATUS block. Verify COM5 (CP210x) is selected and running Smart Traffic Lights firmware.";
+          el.metricCards.forEach(c => c.classList.add("is-stale"));
+        } else {
+          el.staleAlertBanner.style.display = "none";
+          el.metricCards.forEach(c => c.classList.remove("is-stale"));
+        }
+
+        if (!isConnected) {
+          clearLiveSignalDisplay(newStatus);
+        }
+        updateControlsEnablement();
+      }
+
+      function updateSingleLamp(svgEls, dotEl, pillEl, isOn, activeClass, onLabel) {
+        svgEls.forEach(svgEl => {
+          svgEl.classList.remove("active-red", "active-yellow", "active-green");
+          if (isOn) {
+            svgEl.classList.add(activeClass);
+          }
+        });
+        dotEl.classList.remove("on-red", "on-yellow", "on-green");
+        if (isOn) {
+          dotEl.classList.add(
+            activeClass === "active-red" ? "on-red" :
+            activeClass === "active-yellow" ? "on-yellow" : "on-green"
+          );
+        }
+        pillEl.textContent = isOn ? (onLabel || "ON (1)") : "OFF (0)";
+        pillEl.classList.toggle("is-on", Boolean(isOn));
+      }
+
+      function clearLiveSignalDisplay(reasonLabel) {
+        // Turn off all signal lamps so stale green/yellow/red lamps are never left illuminated on disconnect
+        updateSingleLamp([el.svgMainWestRed, el.svgMainEastRed], el.dotMainRed, el.pillMainRed, false, "active-red", "OFF");
+        updateSingleLamp([el.svgMainWestYellow, el.svgMainEastYellow], el.dotMainYellow, el.pillMainYellow, false, "active-yellow", "OFF");
+        updateSingleLamp([el.svgMainWestGreen, el.svgMainEastGreen], el.dotMainGreen, el.pillMainGreen, false, "active-green", "OFF");
+
+        updateSingleLamp([el.svgSideRed], el.dotSideRed, el.pillSideRed, false, "active-red", "OFF");
+        updateSingleLamp([el.svgSideYellow], el.dotSideYellow, el.pillSideYellow, false, "active-yellow", "OFF");
+        updateSingleLamp([el.svgSideGreen], el.dotSideGreen, el.pillSideGreen, false, "active-green", "OFF");
+
+        updateSingleLamp([el.svgPedWalk], el.dotPedWalk, el.pillPedWalk, false, "active-green", "OFF");
+        updateSingleLamp([el.svgPedDontWalk], el.dotPedDontWalk, el.pillPedDontWalk, false, "active-red", "OFF");
+
+        el.pillMainRed.textContent = "OFF";
+        el.pillMainYellow.textContent = "OFF";
+        el.pillMainGreen.textContent = "OFF";
+        el.pillSideRed.textContent = "OFF";
+        el.pillSideYellow.textContent = "OFF";
+        el.pillSideGreen.textContent = "OFF";
+        el.pillPedWalk.textContent = "OFF";
+        el.pillPedDontWalk.textContent = "OFF";
+        el.rawVectorDisplay.textContent = "N/A (Disconnected)";
+
+        // Hide decorative vehicles
+        el.svgCarMainEast.style.display = "none";
+        el.svgCarMainWest.style.display = "none";
+        el.svgCarSideRoad.style.display = "none";
+
+        el.modeBadge.setAttribute("data-mode", "UNKNOWN");
+        el.modeBadgeText.textContent = "N/A";
+        el.junctionStateLabel.textContent = reasonLabel || "DISCONNECTED";
+        el.svgSubStatusText.textContent = `Telemetry: ${reasonLabel || "Disconnected"} (All Lamps Off)`;
+        el.svgFreshnessTag.textContent = `Telemetry Status: ${reasonLabel || "Disconnected"}`;
+        el.svgIrZoneStatus.textContent = "Demand: N/A | HwValid: N/A";
+        el.svgPedLatchText.textContent = "Latch: N/A";
+
+        // Reset metrics to N/A
+        el.metricFsmState.textContent = "N/A";
+        el.metricNextTarget.textContent = "Next: N/A";
+        el.metricTimestampSub.textContent = "ESP32 Uptime: N/A";
+        el.metricOpMode.textContent = "N/A";
+        el.metricOpModeSub.textContent = reasonLabel || "Disconnected";
+        el.metricStateElapsed.textContent = "N/A";
+        el.metricPhaseRefSub.textContent = "Configured Ref: N/A";
+        el.metricSideGap.textContent = "N/A";
+        el.metricSideGapSub.textContent = "Reported during SIDE_GREEN";
+        el.metricSideDemand.textContent = "N/A";
+        el.metricSideDemandSub.textContent = "SimVeh: N/A | HwLatched: N/A";
+        el.metricPedDemand.textContent = "N/A";
+        el.metricPedDemandSub.textContent = "Crossing Request Latch";
+        el.metricIrValid.textContent = "N/A";
+        el.metricIrValidSub.textContent = "GPIO 33 Hardware Status";
+      }
+
+      function renderTelemetry(t) {
+        if (!t) return;
+
+        const isStale = (connectionStatus === "TELEMETRY STALE");
+        const staleSuffix = isStale ? " [STALE]" : "";
+
+        // Header badges
+        el.modeBadge.setAttribute("data-mode", t.operatingMode || "UNKNOWN");
+        el.modeBadgeText.textContent = (t.operatingMode || "N/A") + staleSuffix;
+        el.lastTelemetryTime.textContent = `${t.wallTimeStr} (${t.timestampMs} ms)`;
+
+        // Safety banner update only if firmware explicitly reports YES for Physical IR Valid
+        if (t.physicalIrValid === "YES") {
+          el.safetyBannerText.textContent =
+            "Signal indications represent logical outputs reported by the ESP32. Firmware reports Physical IR Valid = YES.";
+        } else {
+          el.safetyBannerText.textContent =
+            "Signal indications represent logical outputs reported by the ESP32. Physical LEDs, the GPIO 33 IR sensor, and the GPIO 32 pedestrian button have not been physically validated.";
+        }
+
+        // D. Live Metrics
+        el.metricFsmState.textContent = (t.currentFsmState || "N/A") + staleSuffix;
+        el.metricNextTarget.textContent = `Next: ${t.nextTargetPhase || "N/A"}`;
+        el.metricTimestampSub.textContent = t.faultReason
+          ? `FAULT: ${t.faultReason}`
+          : `ESP32 Uptime: ${t.timestampMs !== null ? t.timestampMs + " ms" : "N/A"}`;
+
+        el.metricOpMode.textContent = t.operatingMode || "N/A";
+        el.metricOpModeSub.textContent =
+          t.operatingMode === "SERIAL_SIMULATION"
+            ? "Simulated demand inputs enabled"
+            : t.operatingMode === "HARDWARE_READY"
+            ? "Physical GPIO input mode (Sim locked)"
+            : "Reported by ESP32";
+
+        el.metricStateElapsed.textContent = t.stateElapsedMs !== null ? `${t.stateElapsedMs} ms` : "N/A";
+        el.metricPhaseRefSub.textContent = PHASE_REF_TIMINGS[t.currentFsmState] || "Configured Ref: N/A";
+
+        if (t.currentFsmState === "SIDE_GREEN" && t.sideGapState !== null) {
+          el.metricSideGap.textContent = `${t.sideGapState} (${t.sideGapMs} ms)`;
+          el.metricSideGapSub.textContent = "2000 ms clear-gap threshold";
+        } else {
+          el.metricSideGap.textContent = "N/A";
+          el.metricSideGapSub.textContent = "Active only during SIDE_GREEN";
+        }
+
+        el.metricSideDemand.textContent = t.sideDemandStatus || "N/A";
+        el.metricSideDemandSub.textContent = `SimVeh: ${t.simVeh || "N/A"} | HwLatched: ${t.hwLatched || "N/A"}`;
+
+        el.metricPedDemand.textContent = t.pedestrianDemand || "N/A";
+        el.metricPedDemandSub.textContent =
+          t.pedestrianDemand === "LATCHED"
+            ? "Queued for PED_WALK service"
+            : "No active crossing request";
+
+        el.metricIrValid.textContent = t.physicalIrValid || "N/A";
+        el.metricIrValidSub.textContent = t.physicalIrValidNote || "GPIO 33 Hardware Status";
+
+        // C & E. Signal Lamps & Panels (strictly driven by Logical Outputs)
+        if (t.outputs) {
+          const o = t.outputs;
+          updateSingleLamp([el.svgMainWestRed, el.svgMainEastRed], el.dotMainRed, el.pillMainRed, o.mainR === 1, "active-red", "ON (1)");
+          updateSingleLamp([el.svgMainWestYellow, el.svgMainEastYellow], el.dotMainYellow, el.pillMainYellow, o.mainY === 1, "active-yellow", "ON (1)");
+          updateSingleLamp([el.svgMainWestGreen, el.svgMainEastGreen], el.dotMainGreen, el.pillMainGreen, o.mainG === 1, "active-green", "ON (1)");
+
+          updateSingleLamp([el.svgSideRed], el.dotSideRed, el.pillSideRed, o.sideR === 1, "active-red", "ON (1)");
+          updateSingleLamp([el.svgSideYellow], el.dotSideYellow, el.pillSideYellow, o.sideY === 1, "active-yellow", "ON (1)");
+          updateSingleLamp([el.svgSideGreen], el.dotSideGreen, el.pillSideGreen, o.sideG === 1, "active-green", "ON (1)");
+
+          updateSingleLamp([el.svgPedWalk], el.dotPedWalk, el.pillPedWalk, o.pedWalk === 1, "active-green", "ON (1)");
+          updateSingleLamp([el.svgPedDontWalk], el.dotPedDontWalk, el.pillPedDontWalk, o.pedDontWalk === 1, "active-red", "ON (1)");
+
+          el.rawVectorDisplay.textContent = t.rawOutputsLine || "N/A";
+
+          // Decorative vehicles driven by authoritative state & demand
+          const showMainCars = (o.mainG === 1 || o.mainY === 1);
+          el.svgCarMainEast.style.display = showMainCars ? "block" : "none";
+          el.svgCarMainWest.style.display = showMainCars ? "block" : "none";
+          el.svgCarMainEast.classList.toggle("veh-moving-east", o.mainG === 1 && !isStale);
+          el.svgCarMainWest.classList.toggle("veh-moving-west", o.mainG === 1 && !isStale);
+
+          const showSideCar = (t.sideDemandStatus === "PENDING" || o.sideG === 1 || o.sideY === 1);
+          el.svgCarSideRoad.style.display = showSideCar ? "block" : "none";
+          el.svgCarSideRoad.classList.toggle("veh-moving-north", o.sideG === 1 && !isStale);
+        }
+
+        el.junctionStateLabel.textContent = (t.currentFsmState || "UNKNOWN") + staleSuffix;
+        el.svgSubStatusText.textContent = `State: ${t.currentFsmState || "N/A"} |Elapsed: ${t.stateElapsedMs !== null ? t.stateElapsedMs + " ms" : "N/A"}${staleSuffix}`;
+        el.svgFreshnessTag.textContent = isStale
+          ? `WARNING: Telemetry Stale (Last update ${t.wallTimeStr})`
+          : `Live Telemetry Synchronized (${t.wallTimeStr})`;
+
+        el.svgIrZoneStatus.textContent = `Demand: ${t.sideDemandStatus || "N/A"} (Sim=${t.simVeh || "N/A"}) | HwValid: ${t.physicalIrValid || "NO"}`;
+        el.svgIrZone.setAttribute("stroke", t.sideDemandStatus === "PENDING" ? "#D97706" : "#5EEAD4");
+        el.svgPedLatchText.textContent = `Latch: ${t.pedestrianDemand || "N/A"}`;
+
+        updateControlsEnablement();
+      }
+
+      // ======================================================================
+      // SIMULATION & COMMAND ENABLEMENT SAFEGUARDS
+      // ======================================================================
+      function updateControlsEnablement() {
+        const isConnected = (connectionStatus === "CONNECTED" || connectionStatus === "TELEMETRY STALE");
+        const hasCmdPending = Boolean(pendingUserCommand);
+        const hasTelemetry = Boolean(lastValidTelemetry);
+        const mode = hasTelemetry ? lastValidTelemetry.operatingMode : null;
+        const fsmState = hasTelemetry ? lastValidTelemetry.currentFsmState : null;
+        const inFault = (fsmState === "FAULT_SAFE");
+        const isSimMode = (mode === "SERIAL_SIMULATION");
+
+        el.ctrlModeStatusLabel.textContent = `Mode: ${mode || "N/A"}`;
+
+        if (!isConnected) {
+          el.btnSimOn.disabled = true;
+          el.btnSimOff.disabled = true;
+          el.btnVehicleOn.disabled = true;
+          el.btnVehicleOff.disabled = true;
+          el.btnPedestrian.disabled = true;
+          el.btnClearSim.disabled = true;
+          el.btnRefreshStatus.disabled = true;
+          el.btnAskReset.disabled = true;
+          el.simLockNotice.style.display = "block";
+          el.simLockNotice.textContent =
+            "Connect to the ESP32 over USB Serial first. Simulation controls remain locked until SERIAL_SIMULATION mode is confirmed by the controller.";
+          return;
+        }
+
+        // Always-available commands when connected (disabled while another user command is in flight)
+        el.btnRefreshStatus.disabled = hasCmdPending;
+        el.btnAskReset.disabled = hasCmdPending;
+
+        // Mode switching commands (disabled in FAULT_SAFE because firmware rejects mode switch in FAULT_SAFE)
+        el.btnSimOn.disabled = hasCmdPending || !hasTelemetry || inFault || isSimMode;
+        el.btnSimOff.disabled = hasCmdPending || !hasTelemetry || inFault || (mode === "HARDWARE_READY");
+
+        // Simulation-only demand controls: strictly enabled ONLY when ESP32 confirms SERIAL_SIMULATION
+        const canInjectSim = isConnected && !hasCmdPending && hasTelemetry && isSimMode && !inFault;
+        el.btnVehicleOn.disabled = !canInjectSim;
+        el.btnVehicleOff.disabled = !canInjectSim;
+        el.btnPedestrian.disabled = !canInjectSim;
+        el.btnClearSim.disabled = !canInjectSim;
+
+        if (inFault) {
+          el.simLockNotice.style.display = "block";
+          el.simLockNotice.textContent =
+            "Controller is in FAULT_SAFE state. Mode switching and demand injection are locked by firmware; use Reset Controller (RESET) to recover.";
+        } else if (!isSimMode) {
+          el.simLockNotice.style.display = "block";
+          el.simLockNotice.textContent =
+            "Controller reports HARDWARE_READY mode. Simulation-only commands (VEHICLE ON/OFF, PEDESTRIAN, CLEAR) are locked so the firmware never rejects unauthorized simulation inputs. Click 'Enable Simulation (SIM ON)' first.";
+        } else {
+          el.simLockNotice.style.display = "none";
+        }
+      }
+
+      // ======================================================================
+      // FIRMWARE PROTOCOL PARSER
+      // ======================================================================
+      function createEmptyStatusAccumulator() {
+        return {
+          timestampMs: null,
+          operatingMode: null,
+          physicalIrValid: null,
+          physicalIrValidNote: null,
+          currentFsmState: null,
+          stateElapsedMs: null,
+          sideGapState: null,
+          sideGapMs: null,
+          nextTargetPhase: null,
+          sideDemandStatus: null,
+          simVeh: null,
+          hwLatched: null,
+          pedestrianDemand: null,
+          outputs: null,
+          rawOutputsLine: null,
+          faultReason: null
+        };
+      }
+
+      function parseStatusLine(acc, line) {
+        const sepIdx = line.indexOf(":");
+        if (sepIdx === -1) return;
+        const key = line.slice(0, sepIdx).trim();
+        const val = line.slice(sepIdx + 1).trim();
+
+        switch (key) {
+          case "Timestamp": {
+            const m = val.match(/^(\d+)\s*ms$/i);
+            if (m) acc.timestampMs = parseInt(m[1], 10);
+            break;
+          }
+          case "Operating Mode": {
+            acc.operatingMode = val;
+            break;
+          }
+          case "Physical IR Valid": {
+            const m = val.match(/^(YES|NO)\s*(?:\((.*)\))?$/i);
+            if (m) {
+              acc.physicalIrValid = m[1].toUpperCase();
+              acc.physicalIrValidNote = m[2] || "";
+            } else {
+              acc.physicalIrValid = val;
+            }
+            break;
+          }
+          case "Current FSM State": {
+            acc.currentFsmState = val;
+            break;
+          }
+          case "State Elapsed": {
+            const m = val.match(/^(\d+)\s*ms$/i);
+            if (m) acc.stateElapsedMs = parseInt(m[1], 10);
+            break;
+          }
+          case "Side Gap Timer": {
+            const m = val.match(/^([A-Z_]+)\s*\((\d+)\s*ms\)$/i);
+            if (m) {
+              acc.sideGapState = m[1].toUpperCase();
+              acc.sideGapMs = parseInt(m[2], 10);
+            }
+            break;
+          }
+          case "Next Target Phase": {
+            acc.nextTargetPhase = val;
+            break;
+          }
+          case "Side Demand": {
+            const m = val.match(/^([A-Z_]+)\s*\(SimVeh=([A-Z]+),\s*HwLatched=([A-Z]+)\)$/i);
+            if (m) {
+              acc.sideDemandStatus = m[1].toUpperCase();
+              acc.simVeh = m[2].toUpperCase();
+              acc.hwLatched = m[3].toUpperCase();
+            } else {
+              acc.sideDemandStatus = val;
+            }
+            break;
+          }
+          case "Pedestrian Demand": {
+            acc.pedestrianDemand = val;
+            break;
+          }
+          case "Logical Outputs": {
+            acc.rawOutputsLine = val;
+            const m = val.match(
+              /MAIN\[G=([01])\s+Y=([01])\s+R=([01])\]\s+SIDE\[G=([01])\s+Y=([01])\s+R=([01])\]\s+PED\[WALK=([01])\s+DONT_WALK=([01])\]/
+            );
+            if (m) {
+              acc.outputs = {
+                mainG: parseInt(m[1], 10),
+                mainY: parseInt(m[2], 10),
+                mainR: parseInt(m[3], 10),
+                sideG: parseInt(m[4], 10),
+                sideY: parseInt(m[5], 10),
+                sideR: parseInt(m[6], 10),
+                pedWalk: parseInt(m[7], 10),
+                pedDontWalk: parseInt(m[8], 10)
+              };
+            }
+            break;
+          }
+          case "Fault Reason": {
+            acc.faultReason = val;
+            break;
+          }
+        }
+      }
+
+      function finalizeStatusBlock(acc, rawLines) {
+        // Verify minimal validity of the parsed STATUS snapshot before accepting
+        if (!acc || !acc.operatingMode || !acc.currentFsmState || !acc.outputs) {
+          appendConsole("sys-err", "PARSE", "Ignored incomplete or malformed STATUS block");
+          return;
+        }
+
+        const wasManual = statusRequestManual;
+        statusRequestInFlight = false;
+        statusRequestManual = false;
+
+        const wasFirstSnapshot = (lastValidTelemetry === null);
+        acc.wallTimeStr = formatWallTime(new Date());
+        lastValidTelemetry = acc;
+        lastTelemetryReceivedAtMs = Date.now();
+
+        if (connectionStatus !== "CONNECTED") {
+          const portSummary = detectedFirmwareVersion
+            ? `${selectedPortLabel.replace(/\s*\(Port Open.*\)$/, "")} | FW ${detectedFirmwareVersion}`
+            : selectedPortLabel.replace(/\s*\(Port Open.*\)$/, "");
+          setConnectionStatus("CONNECTED", portSummary);
+        }
+
+        if (wasFirstSnapshot && !pendingUserCommand) {
+          setCommandFeedback(
+            "success",
+            "ESP32 Telemetry Verified",
+            `Valid STATUS received (${acc.currentFsmState}, ${acc.operatingMode}). Dashboard synchronized with controller.`
+          );
+        }
+
+        if (wasManual || el.chkLogPollingStatus.checked) {
+          appendConsole(
+            "sys-info",
+            "STATUS",
+            `[${acc.timestampMs} ms] Mode=${acc.operatingMode} | State=${acc.currentFsmState} (${acc.stateElapsedMs} ms) | Side=${acc.sideDemandStatus} | Ped=${acc.pedestrianDemand} | ${acc.rawOutputsLine}`
+          );
+        }
+
+        if (pendingUserCommand && pendingUserCommand.cmd === "STATUS") {
+          resolvePendingUserCommand(true, `STATUS received (${acc.currentFsmState}, ${acc.operatingMode})`);
+        }
+
+        renderTelemetry(lastValidTelemetry);
+      }
+
+      function processIncomingLine(rawLine) {
+        const line = rawLine.trim();
+        if (!line) return;
+
+        // 1. Check for STATUS block boundaries
+        if (line === "================ CONTROLLER STATUS ================") {
+          inStatusBlock = true;
+          currentStatusLines = [line];
+          statusAccumulator = createEmptyStatusAccumulator();
+          return;
+        }
+
+        if (inStatusBlock) {
+          currentStatusLines.push(line);
+          if (line === "===================================================") {
+            inStatusBlock = false;
+            finalizeStatusBlock(statusAccumulator, currentStatusLines);
+            statusAccumulator = null;
+            currentStatusLines = [];
+          } else {
+            parseStatusLine(statusAccumulator, line);
+          }
+          return;
+        }
+
+        // 2. Check for EVENT line: [<ms> ms] EVENT: <TYPE> | <DETAIL>
+        const eventMatch = line.match(/^\[(\d+)\s*ms\]\s+EVENT:\s+([A-Z0-9_]+)\s*\|\s*(.*)$/);
+        if (eventMatch) {
+          const espMs = eventMatch[1];
+          const eventType = eventMatch[2];
+          const detail = eventMatch[3];
+
+          const isReject = (eventType === "COMMAND_REJECTED" || eventType === "FAULT_DETECTED");
+          appendConsole(
+            isReject ? "rx-reject" : "rx-event",
+            eventType,
+            `[${espMs} ms] ${detail}`
+          );
+
+          // Match with pending user command if applicable
+          if (pendingUserCommand) {
+            if (isReject) {
+              resolvePendingUserCommand(false, `${eventType}: ${detail}`);
+            } else {
+              resolvePendingUserCommand(true, `${eventType}: ${detail}`);
+            }
+          }
+
+          // Trigger an immediate serialized STATUS refresh so UI metrics & lamps update immediately
+          requestStatusSerialized(false);
+          return;
+        }
+
+        // 3. Check for State Transition line: [<ms> ms] <FROM> -> <TO> | Reason: <REASON>
+        const transMatch = line.match(/^\[(\d+)\s*ms\]\s+([A-Z_]+)\s*->\s*([A-Z_]+)\s*\|\s*Reason:\s*(.*)$/);
+        if (transMatch) {
+          const espMs = transMatch[1];
+          const fromState = transMatch[2];
+          const toState = transMatch[3];
+          const reason = transMatch[4];
+
+          appendConsole(
+            "rx-transition",
+            "PHASE",
+            `[${espMs} ms] ${fromState} -> ${toState} (Reason: ${reason})`
+          );
+
+          // Request authoritative STATUS snapshot immediately on state transition
+          requestStatusSerialized(false);
+          return;
+        }
+
+        // 4. Startup banner VERSION detection or HELP output lines
+        const verMatch = line.match(/^VERSION\s*:\s*(.+)$/i);
+        if (verMatch) {
+          detectedFirmwareVersion = verMatch[1].trim();
+          const baseLabel = selectedPortLabel.replace(/\s*\(Port Open.*\)$/, "").replace(/\s*\|\s*FW\s+.*$/, "");
+          el.metricPortInfo.textContent = `Port: ${baseLabel} | FW ${detectedFirmwareVersion}`;
+        }
+        appendConsole("sys-info", "ESP32", line);
+      }
+
+      // ======================================================================
+      // SERIALIZED COMMAND & POLLING ENGINE
+      // ======================================================================
+      function resolvePendingUserCommand(accepted, detailText) {
+        if (!pendingUserCommand) return;
+        const cmdName = pendingUserCommand.cmd;
+        if (pendingUserCommand.timeoutId) {
+          clearTimeout(pendingUserCommand.timeoutId);
+        }
+        pendingUserCommand = null;
+
+        if (accepted) {
+          setCommandFeedback("success", `Command Accepted: ${cmdName}`, detailText);
+        } else {
+          setCommandFeedback("error", `Command Rejected / Failed: ${cmdName}`, detailText);
+        }
+        updateControlsEnablement();
+      }
+
+      async function writeSerialLine(cmdStr) {
+        if (!writer || !port) {
+          throw new Error("Serial writer is not open.");
+        }
+        const payload = new TextEncoder().encode(cmdStr + "\r\n");
+        await writer.write(payload);
+      }
+
+      async function sendUserCommand(cmdStr) {
+        if (!port || !writer || (connectionStatus !== "CONNECTED" && connectionStatus !== "TELEMETRY STALE")) {
+          setCommandFeedback("error", "Not Connected", "Open the ESP32 serial connection before sending commands.");
+          return;
+        }
+        if (pendingUserCommand) {
+          return;
+        }
+
+        const normalized = cmdStr.trim().toUpperCase();
+        const isManualStatus = (normalized === "STATUS");
+
+        pendingUserCommand = {
+          cmd: normalized,
+          sentAtMs: Date.now(),
+          timeoutId: setTimeout(() => {
+            if (pendingUserCommand && pendingUserCommand.cmd === normalized) {
+              resolvePendingUserCommand(
+                false,
+                "Timed out waiting for an explicit firmware acknowledgement over Serial."
+              );
+            }
+          }, 2200)
+        };
+
+        if (isManualStatus) {
+          statusRequestInFlight = true;
+          statusRequestSentAtMs = Date.now();
+          statusRequestManual = true;
+        }
+
+        setCommandFeedback("pending", `Sending Command: ${normalized}`, "Waiting for authoritative ESP32 Serial response...");
+        updateControlsEnablement();
+        appendConsole("tx", "TX CMD", normalized);
+
+        try {
+          await writeSerialLine(normalized);
+        } catch (err) {
+          resolvePendingUserCommand(false, `Serial write failed: ${err.message || err}`);
+          handleUnexpectedSerialLoss(`Serial write error: ${err.message || err}`);
+        }
+      }
+
+      async function requestStatusSerialized(isManual) {
+        if (!port || !writer || isDisconnecting) return;
+        const now = Date.now();
+
+        // Never overlap in-flight STATUS requests unless the previous request timed out
+        if (statusRequestInFlight) {
+          if ((now - statusRequestSentAtMs) < STATUS_TIMEOUT_MS) {
+            return;
+          }
+          statusRequestInFlight = false;
+        }
+
+        // Avoid colliding with an active user command write
+        if (pendingUserCommand && !isManual) {
+          return;
+        }
+
+        statusRequestInFlight = true;
+        statusRequestSentAtMs = now;
+        statusRequestManual = Boolean(isManual);
+
+        try {
+          await writeSerialLine("STATUS");
+        } catch (err) {
+          statusRequestInFlight = false;
+          handleUnexpectedSerialLoss(`Polling write failed: ${err.message || err}`);
+        }
+      }
+
+      function startPollingLoop() {
+        stopPollingLoop();
+
+        // Immediate initial STATUS poll after opening port
+        requestStatusSerialized(false);
+
+        pollTimerId = setInterval(() => {
+          requestStatusSerialized(false);
+        }, POLL_INTERVAL_MS);
+
+        staleCheckTimerId = setInterval(() => {
+          const now = Date.now();
+          if (connectionStatus === "CONNECTED" && lastTelemetryReceivedAtMs > 0) {
+            const age = now - lastTelemetryReceivedAtMs;
+            if (age > STALE_THRESHOLD_MS) {
+              setConnectionStatus("TELEMETRY STALE");
+              appendConsole("sys-err", "STALE", `No valid STATUS response for ${age} ms.`);
+            }
+          } else if (connectionStatus === "CONNECTING" && port && portOpenedAtMs > 0 && lastTelemetryReceivedAtMs === 0) {
+            const waitAge = now - portOpenedAtMs;
+            if (waitAge > STALE_THRESHOLD_MS) {
+              setConnectionStatus("TELEMETRY STALE");
+              setCommandFeedback(
+                "error",
+                "No ESP32 STATUS Response",
+                "Serial port opened, but no valid STATUS block arrived within 2.8 s. Verify COM5 (CP210x) is selected."
+              );
+              appendConsole("sys-err", "TIMEOUT", `Port open for ${waitAge} ms without a valid STATUS block.`);
+            }
+          }
+        }, 500);
+      }
+
+      function stopPollingLoop() {
+        if (pollTimerId !== null) {
+          clearInterval(pollTimerId);
+          pollTimerId = null;
+        }
+        if (staleCheckTimerId !== null) {
+          clearInterval(staleCheckTimerId);
+          staleCheckTimerId = null;
+        }
+        statusRequestInFlight = false;
+        statusRequestManual = false;
+      }
+
+      // ======================================================================
+      // WEB SERIAL CONNECTION & CLEAN TEARDOWN LIFECYCLE
+      // ======================================================================
+      function describePortInfo(serialPort) {
+        if (!serialPort || typeof serialPort.getInfo !== "function") {
+          return "Selected Serial Port (115200)";
+        }
+        const info = serialPort.getInfo();
+        if (info && info.usbVendorId && info.usbProductId) {
+          const vid = info.usbVendorId.toString(16).toUpperCase().padStart(4, "0");
+          const pid = info.usbProductId.toString(16).toUpperCase().padStart(4, "0");
+          return `USB VID:PID=${vid}:${pid} @ ${SERIAL_BAUD}`;
+        }
+        return `Serial Port @ ${SERIAL_BAUD}`;
+      }
+
+      async function connectSerial() {
+        if (!("serial" in navigator)) {
+          el.webSerialUnsupported.style.display = "block";
+          setConnectionStatus("ERROR", "Web Serial Unsupported");
+          return;
+        }
+
+        if (port || connectionStatus === "CONNECTING") {
+          return;
+        }
+
+        try {
+          setConnectionStatus("CONNECTING", "Awaiting User Selection...");
+          setCommandFeedback("pending", "Opening Serial Port...", "Select your ESP32 USB-UART port (e.g., COM5) in the browser chooser.");
+
+          const selectedPort = await navigator.serial.requestPort();
+          await selectedPort.open({ baudRate: SERIAL_BAUD });
+
+          // Do not assert DTR/RTS reset pulse automatically when connecting
+          port = selectedPort;
+          const label = describePortInfo(port);
+          writer = port.writable ? port.writable.getWriter() : null;
+
+          rxBuffer = "";
+          inStatusBlock = false;
+          currentStatusLines = [];
+          statusAccumulator = null;
+          lastValidTelemetry = null;
+          lastTelemetryReceivedAtMs = 0;
+          portOpenedAtMs = Date.now();
+          detectedFirmwareVersion = null;
+
+          setConnectionStatus("CONNECTING", `${label} (Port Open — Awaiting STATUS)`);
+          appendConsole("sys-info", "CONNECT", `Opened ${label}. Polling STATUS to verify ESP32 response...`);
+          setCommandFeedback("pending", "Serial Port Opened — Verifying ESP32...", `Opened ${label}. Waiting for first valid STATUS response before marking CONNECTED.`);
+
+          readLoopActive = true;
+          runSerialReadLoop();
+          startPollingLoop();
+        } catch (err) {
+          const msg = err && err.message ? err.message : String(err);
+          await cleanupSerialResources();
+          if (err && err.name === "NotFoundError") {
+            setConnectionStatus("DISCONNECTED", "Selection Cancelled");
+            setCommandFeedback("idle", "Connection Cancelled", "No serial port was selected in the browser chooser.");
+            appendConsole("sys-info", "CANCEL", "User cancelled serial port selection.");
+          } else {
+            setConnectionStatus("ERROR", "Open Failed");
+            setCommandFeedback("error", "Failed to Open Serial Port", msg);
+            appendConsole("sys-err", "ERROR", `Serial connection failed: ${msg}`);
+          }
+        }
+      }
+
+      async function runSerialReadLoop() {
+        const decoder = new TextDecoder("utf-8");
+        try {
+          while (port && port.readable && readLoopActive && !isDisconnecting) {
+            reader = port.readable.getReader();
+            try {
+              while (readLoopActive && !isDisconnecting) {
+                const { value, done } = await reader.read();
+                if (done) {
+                  break;
+                }
+                if (value) {
+                  rxBuffer += decoder.decode(value, { stream: true });
+                  let newlineIdx;
+                  while ((newlineIdx = rxBuffer.indexOf("\n")) !== -1) {
+                    const line = rxBuffer.slice(0, newlineIdx).replace(/\r$/, "");
+                    rxBuffer = rxBuffer.slice(newlineIdx + 1);
+                    processIncomingLine(line);
+                  }
+                }
+              }
+            } finally {
+              if (reader) {
+                try {
+                  reader.releaseLock();
+                } catch (_) {}
+                reader = null;
+              }
+            }
+          }
+        } catch (err) {
+          if (!isDisconnecting) {
+            handleUnexpectedSerialLoss(err && err.message ? err.message : String(err));
+          }
+        }
+      }
+
+      async function cleanupSerialResources() {
+        stopPollingLoop();
+        readLoopActive = false;
+
+        if (pendingUserCommand) {
+          if (pendingUserCommand.timeoutId) {
+            clearTimeout(pendingUserCommand.timeoutId);
+          }
+          pendingUserCommand = null;
+        }
+
+        if (reader) {
+          try {
+            await reader.cancel();
+          } catch (_) {}
+          try {
+            reader.releaseLock();
+          } catch (_) {}
+          reader = null;
+        }
+
+        if (writer) {
+          try {
+            writer.releaseLock();
+          } catch (_) {}
+          writer = null;
+        }
+
+        if (port) {
+          const closingPort = port;
+          port = null;
+          try {
+            await closingPort.close();
+          } catch (_) {}
+        }
+      }
+
+      async function disconnectSerial() {
+        if (isDisconnecting) return;
+        isDisconnecting = true;
+        try {
+          await cleanupSerialResources();
+          setConnectionStatus("DISCONNECTED", "Released (Available for PlatformIO)");
+          setCommandFeedback("idle", "Disconnected Cleanly", "Serial port released. You can now run PlatformIO uploads or Serial Monitor.");
+          appendConsole("sys-info", "DISCONNECT", "Serial port closed and released cleanly.");
+        } finally {
+          isDisconnecting = false;
+        }
+      }
+
+      async function handleUnexpectedSerialLoss(reasonText) {
+        if (isDisconnecting) return;
+        isDisconnecting = true;
+        try {
+          await cleanupSerialResources();
+          setConnectionStatus("SERIAL LOST", "Connection Dropped");
+          setCommandFeedback("error", "Serial Connection Lost", reasonText || "The ESP32 USB serial port disconnected unexpectedly.");
+          appendConsole("sys-err", "SERIAL LOST", reasonText || "USB Serial connection lost.");
+        } finally {
+          isDisconnecting = false;
+        }
+      }
+
+      // ======================================================================
+      // EVENT LISTENERS & INITIALIZATION
+      // ======================================================================
+      function initDashboard() {
+        if (!("serial" in navigator)) {
+          el.webSerialUnsupported.style.display = "block";
+          el.btnConnect.disabled = true;
+          appendConsole("sys-err", "BROWSER", "Web Serial API not detected. Open in Microsoft Edge or Google Chrome on desktop.");
+        } else {
+          appendConsole("sys-info", "READY", "Dashboard initialized. Click 'Connect ESP32' and choose COM5 (115200 baud).");
+          navigator.serial.addEventListener("disconnect", (event) => {
+            if (port && event.target === port) {
+              handleUnexpectedSerialLoss("USB serial device was unplugged.");
+            }
+          });
+        }
+
+        el.btnConnect.addEventListener("click", () => {
+          connectSerial();
+        });
+
+        el.btnDisconnect.addEventListener("click", () => {
+          disconnectSerial();
+        });
+
+        el.btnRetryStatus.addEventListener("click", () => {
+          sendUserCommand("STATUS");
+        });
+
+        // Simulation & Controller Commands
+        el.btnSimOn.addEventListener("click", () => sendUserCommand("SIM ON"));
+        el.btnSimOff.addEventListener("click", () => sendUserCommand("SIM OFF"));
+        el.btnVehicleOn.addEventListener("click", () => sendUserCommand("VEHICLE ON"));
+        el.btnVehicleOff.addEventListener("click", () => sendUserCommand("VEHICLE OFF"));
+        el.btnPedestrian.addEventListener("click", () => sendUserCommand("PEDESTRIAN"));
+        el.btnClearSim.addEventListener("click", () => sendUserCommand("CLEAR"));
+        el.btnRefreshStatus.addEventListener("click", () => sendUserCommand("STATUS"));
+
+        // Explicit RESET Confirmation Flow
+        el.btnAskReset.addEventListener("click", () => {
+          el.resetConfirmBox.classList.add("is-open");
+          el.btnConfirmReset.focus();
+        });
+
+        el.btnCancelReset.addEventListener("click", () => {
+          el.resetConfirmBox.classList.remove("is-open");
+          el.btnAskReset.focus();
+        });
+
+        el.btnConfirmReset.addEventListener("click", () => {
+          el.resetConfirmBox.classList.remove("is-open");
+          sendUserCommand("RESET");
+        });
+
+        // Console Utilities
+        el.btnClearConsole.addEventListener("click", () => {
+          consoleEntries.length = 0;
+          el.consoleLog.innerHTML = "";
+          el.consoleCountBadge.textContent = `0 / ${MAX_CONSOLE_ENTRIES} entries`;
+        });
+
+        el.btnCopyConsole.addEventListener("click", async () => {
+          const text = consoleEntries
+            .map(e => `[${e.timeStr}] [${e.tag}] ${e.message}`)
+            .join("\n");
+          try {
+            await navigator.clipboard.writeText(text || "Console is empty.");
+            setCommandFeedback("success", "Console Copied", `Copied ${consoleEntries.length} log entries to clipboard.`);
+          } catch (_) {
+            setCommandFeedback("error", "Copy Failed", "Clipboard write permission was denied by the browser.");
+          }
+        });
+
+        // Ensure clean serial port release on page unload
+        window.addEventListener("beforeunload", () => {
+          if (port) {
+            cleanupSerialResources();
+          }
+        });
+
+        setConnectionStatus("DISCONNECTED", "Not Selected");
+      }
+
+      initDashboard();
+    })();
+  </script>
+</body>
+</html>
