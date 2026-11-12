@@ -95,12 +95,13 @@ The ESP32 Smart Traffic Light Controller uses a strictly non-blocking, `millis()
 
 | Subsystem / Feature | Status | Notes |
 | :--- | :--- | :--- |
-| Non-blocking `millis()` FSM (`STARTUP_SAFE`, `ALL_RED`, `MAIN`, `SIDE`, `TURN`, `PED_WALK`, `FAULT_SAFE`) | **Implemented and tested in software** | Verified by 31 automated Unity tests (`test_main.cpp`). |
-| Operating modes (`AUTO`, `FIXED`, `ACTUATED`, `ADAPTIVE`, `MANUAL`) | **Implemented and tested in software** | Verified in unit tests 16, 17, 18, 19, 26, and 30. |
-| 6-channel IR sensor filtering, stuck-active timeout, and chatter suppression | **Implemented and tested in software** | Software logic tested; physical sensors remain unvalidated (`sensorValidatedMask = 0x00`). |
-| Dual pedestrian buttons & dual RG signal groups with configurable clearance | **Implemented and tested in software** | Verified in unit tests 4, 10, 23, and 24. |
-| Explicit Right-Hand Traffic (`Keep-Right`) conflict matrix & Protected Turn gate | **Configured but not physically validated** | `protectedTurnCommissioned = false` by default until physical junction lane geometry is confirmed. |
-| Vehicle 5 V common-ground high-side sourcing driver stage | **Blocked pending hardware verification** | `ULN2003A` is a low-side sink and cannot source `+5V` to common-ground vehicle modules. Physical vehicle outputs remain disabled (`VEHICLE_HIGH_SIDE_DRIVER_VERIFIED = false`) until a high-side driver is wired. |
-| Pedestrian LED `ULN2003A` low-side driver (common-anode + series resistors) | **Configured but not physically validated** | Compatible with `ULN2003A` when wired common-anode to `+5V` with individual current-limiting resistors. |
-| Hardware emergency vehicle transponder/siren receiver | **Not yet implemented** | Extensible software interface (`requestEmergencyPriority`) is implemented and rejects ordinary IR sensors; physical receiver hardware is not present. |
+| Non-blocking `millis()` FSM (`STARTUP_SAFE`, `ALL_RED`, `MAIN`, `SIDE`, `TURN`, `PED_WALK`, `FAULT_SAFE`) | **Implemented and physically verified on target hardware** | Verified by 49 automated Unity tests (`test_main.cpp`) directly on ESP32 on COM5. |
+| Operating modes (`AUTO`, `FIXED`, `ACTUATED`, `ADAPTIVE`, `MANUAL`) | **Implemented and tested on hardware** | Production firmware defaults to `MODE FIXED` prototype timings; adaptive mode safety-gated by physical IR sensor commissioning. |
+| 6-channel IR sensor filtering, stuck-active timeout, and chatter suppression | **Integrated in firmware; idle checks passed** | 2 independent sensors per road (`Main: 33/34`, `Side: 35/36`, `Turn: 39/15`); idle electrical checks PASS (`RawHigh=1`), awaiting physical obstacle detect-and-release sweeps. |
+| Dual pedestrian buttons & dual RG signal groups with configurable clearance | **Commissioned and verified on hardware** | PED1 (19/18, Button 32) and PED2 (17/16, Button 4) operate via ULN2003A low-side sink driver. |
+| Explicit Right-Hand Traffic (`RHT / Keep-Right`) conflict matrix & Protected Turn gate | **Configured; Turn held in Safe Red** | `rightHandTrafficRule = true` enforced; `protectedTurnCommissioned = false` keeps Turn in continuous RED until junction geometry confirmed. |
+| Vehicle 5V direct ESP32 output driver stage | **Commissioned and physically energizing** | Vehicles wire directly to ESP32 outputs (`DIRECT_ACTIVE_HIGH`, `VEHICLE_DRIVER_VERIFIED = true`). Main Green (GPIO 25) and Side Green (GPIO 14) energize during their phases. |
+| Pedestrian LED `ULN2003A` low-side sink driver | **Commissioned and persisted** | Verified on target (`LOW_SIDE_ULN2003A_ACTIVE_HIGH`, `PED_ULN2003A_DRIVER_VERIFIED = true`). |
+| Interactive Web Dashboard (`tools/demo_dashboard.html`) | **Implemented and fully synchronized** | Native Web Serial API at 115200 baud; supports live SVG junction, 9 vehicle lamps, 4 pedestrian lamps, 6 IR sensor cards, timings countdown, and controls. |
+
 

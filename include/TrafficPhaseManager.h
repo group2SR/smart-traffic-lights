@@ -6,11 +6,10 @@
 #include "TrafficConfig.h"
 
 // ============================================================================
-// TRAFFIC PHASE & CONFLICT MATRIX MANAGER (Right-Hand Traffic / Keep-Right)
+// TRAFFIC PHASE & CONFLICT MATRIX MANAGER
 // ============================================================================
 // Responsibilities:
-// - Maintain the explicit, configurable movement-conflict matrix for
-//   Right-Hand Traffic (Keep-Right).
+// - Maintain the explicit, configurable movement-conflict matrix.
 // - Enforce that Protected Turn (Vehicle Group 3) remains disabled/uncommissioned
 //   until physical junction turning paths are confirmed (protectedTurnCommissioned).
 // - Never infer that two movements are compatible simply because they belong to
@@ -28,17 +27,15 @@ enum class ControlMode : uint8_t {
 
 class TrafficPhaseManager {
 public:
-    TrafficPhaseManager() {
-        conflictMatrix_ = TrafficConfig::DEFAULT_CONFLICT_MATRIX;
-        emergencyActive_ = false;
-        emergencyMovement_ = TrafficConfig::MovementId::MAIN_ROAD;
-    }
+    TrafficPhaseManager()
+        : conflictMatrix_(TrafficConfig::DEFAULT_CONFLICT_MATRIX),
+          emergencyActive_(false),
+          emergencyMovement_(TrafficConfig::MovementId::MAIN_ROAD) {}
 
     bool applyConflictMatrix(const TrafficConfig::ConflictMatrixConfig& cfg) {
         bool valid = true;
         TrafficConfig::ConflictMatrixConfig sanitized = cfg;
 
-        // Project strictly uses Right-Hand Traffic (Keep-Right)
         if (!sanitized.rightHandTrafficRule) {
             sanitized.rightHandTrafficRule = true;
             valid = false;
@@ -80,6 +77,18 @@ public:
         return conflictMatrix_;
     }
 
+    bool isRightHandTrafficRule() const {
+        return conflictMatrix_.rightHandTrafficRule;
+    }
+
+    static const TrafficConfig::RhtMovementDescriptor& getMovementDescriptor(TrafficConfig::MovementId m) {
+        const size_t idx = static_cast<size_t>(m);
+        if (idx < static_cast<size_t>(TrafficConfig::MovementId::COUNT)) {
+            return TrafficConfig::RHT_MOVEMENT_DESCRIPTORS[idx];
+        }
+        return TrafficConfig::RHT_MOVEMENT_DESCRIPTORS[0];
+    }
+
     void setProtectedTurnCommissioned(bool commissioned) {
         conflictMatrix_.protectedTurnCommissioned = commissioned;
     }
@@ -99,6 +108,9 @@ public:
 
     bool isMovementPermitted(TrafficConfig::MovementId candidate,
                              const bool activeMovements[static_cast<size_t>(TrafficConfig::MovementId::COUNT)]) const {
+        if (!conflictMatrix_.rightHandTrafficRule) {
+            return false;
+        }
         if (candidate == TrafficConfig::MovementId::PROTECTED_TURN && !conflictMatrix_.protectedTurnCommissioned) {
             return false;
         }
@@ -106,6 +118,22 @@ public:
         for (size_t i = 0; i < n; ++i) {
             if (activeMovements[i] && i != static_cast<size_t>(candidate)) {
                 if (areMovementsConflicting(candidate, static_cast<TrafficConfig::MovementId>(i))) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    bool verifyActiveMovementsConflictFree(
+        const bool activeMovements[static_cast<size_t>(TrafficConfig::MovementId::COUNT)]) const {
+        if (!conflictMatrix_.rightHandTrafficRule) {
+            return false;
+        }
+        const size_t n = static_cast<size_t>(TrafficConfig::MovementId::COUNT);
+        for (size_t i = 0; i < n; ++i) {
+            if (activeMovements[i]) {
+                if (!isMovementPermitted(static_cast<TrafficConfig::MovementId>(i), activeMovements)) {
                     return false;
                 }
             }
@@ -156,4 +184,3 @@ private:
 };
 
 #endif // TRAFFIC_PHASE_MANAGER_H
-

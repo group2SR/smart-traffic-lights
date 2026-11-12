@@ -9,8 +9,11 @@
 // DEMAND MANAGER MODULE
 // ============================================================================
 // Responsibilities:
-// - Track vehicle demand (simulated and physical) per vehicle movement:
-//   MAIN_ROAD (0), SIDE_ROAD (1), PROTECTED_TURN (2).
+// - Track vehicle demand (simulated and physical across both sensors per road)
+//   for each vehicle movement:
+//     MAIN_ROAD (0)      : Sensor 1 (GPIO 33) & Sensor 2 (GPIO 34)
+//     SIDE_ROAD (1)      : Sensor 1 (GPIO 35) & Sensor 2 (GPIO 36)
+//     PROTECTED_TURN (2) : Sensor 1 (GPIO 39) & Sensor 2 (GPIO 15)
 // - Track waiting time since demand was first registered while movement is RED.
 // - Track number of skipped cycles to prevent starvation.
 // - Compute deterministic, testable demand priority scores for ADAPTIVE mode.
@@ -19,6 +22,8 @@ struct ApproachDemandState {
     bool     hasDemand;
     bool     simDemandActive;
     bool     simPresenceActive;
+    bool     sensor1Active;
+    bool     sensor2Active;
     uint8_t  activeSensorCount;
     uint32_t demandStartMs;
     uint32_t waitingTimeMs;
@@ -28,8 +33,7 @@ struct ApproachDemandState {
 
 class DemandManager {
 public:
-    DemandManager() {
-        config_ = TrafficConfig::DEFAULT_DEMAND_CONFIG;
+    DemandManager() : config_(TrafficConfig::DEFAULT_DEMAND_CONFIG) {
         reset(0);
     }
 
@@ -38,6 +42,8 @@ public:
             approaches_[i].hasDemand         = false;
             approaches_[i].simDemandActive   = false;
             approaches_[i].simPresenceActive = false;
+            approaches_[i].sensor1Active     = false;
+            approaches_[i].sensor2Active     = false;
             approaches_[i].activeSensorCount = 0;
             approaches_[i].demandStartMs     = nowMs;
             approaches_[i].waitingTimeMs     = 0;
@@ -96,8 +102,10 @@ public:
             const TrafficConfig::MovementId m = static_cast<TrafficConfig::MovementId>(i);
             ApproachDemandState& st = approaches_[i];
 
-            const bool hwDemand = detector.hasDemandForMovement(m);
+            const bool hwDemand   = detector.hasDemandForMovement(m);
             const uint8_t hwCount = detector.countActiveSensorsForMovement(m);
+            st.sensor1Active = detector.isRoadSensorDetected(m, 0) || detector.isRoadSensorLatched(m, 0);
+            st.sensor2Active = detector.isRoadSensorDetected(m, 1) || detector.isRoadSensorLatched(m, 1);
 
             const bool currentDemand = simulationMode
                                            ? (st.simDemandActive || hwDemand)
@@ -197,4 +205,3 @@ private:
 };
 
 #endif // DEMAND_MANAGER_H
-

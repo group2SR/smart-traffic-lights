@@ -20,7 +20,7 @@
 // - Pedestrian WALK and clearance durations
 // - Sensor debounce, stability filtering, stuck timeout, and sensor-to-movement map
 // - Demand thresholds, wait-time weights, and starvation limits
-// - Right-Hand Traffic (Keep-Right) conflict matrix & protected-turn commissioning flag
+// - Conflict matrix & protected-turn commissioning flag
 // - Electrical output driver settings
 //
 // Corrupted or out-of-range settings are automatically rejected and fall back
@@ -41,11 +41,17 @@ struct PersistentControllerConfig {
     uint32_t                            checksum;
 };
 
+enum class NvsLoadStatus : uint8_t {
+    LOADED_VALID           = 0,
+    INITIALIZED_FIRST_BOOT = 1,
+    CORRUPTED_FALLBACK     = 2
+};
+
 class ConfigurationStorage {
 public:
-    static constexpr uint32_t CONFIG_MAGIC          = 0x53544C32UL; // "STL2"
-    static constexpr uint16_t CONFIG_SCHEMA_VERSION = 2;
-    static constexpr const char* NVS_NAMESPACE      = "stl_cfg_v2";
+    static constexpr uint32_t CONFIG_MAGIC          = 0x53544C33UL; // "STL3"
+    static constexpr uint16_t CONFIG_SCHEMA_VERSION = 3;
+    static constexpr const char* NVS_NAMESPACE      = "stl_cfg_v3";
     static constexpr const char* NVS_BLOB_KEY       = "ctrl_blob";
 
     ConfigurationStorage()
@@ -62,12 +68,17 @@ public:
         memset(&cfg, 0, sizeof(cfg));
         cfg.magic                 = CONFIG_MAGIC;
         cfg.schemaVersion         = CONFIG_SCHEMA_VERSION;
+#ifdef PIO_UNIT_TESTING
         cfg.controlMode           = static_cast<uint8_t>(ControlMode::AUTO);
-        cfg.vehicleDriverType     = static_cast<uint8_t>(TrafficConfig::OutputDriverType::UNVERIFIED_SAFE_DISABLED);
-        cfg.pedDriverType         = static_cast<uint8_t>(TrafficConfig::OutputDriverType::LOW_SIDE_ULN2003A_ACTIVE_HIGH);
-        cfg.vehicleDriverVerified = TrafficConfig::VEHICLE_HIGH_SIDE_DRIVER_VERIFIED;
-        cfg.pedDriverVerified     = TrafficConfig::PED_ULN2003A_DRIVER_VERIFIED;
         cfg.timings               = TrafficConfig::DEFAULT_TIMING_CONFIG;
+#else
+        cfg.controlMode           = static_cast<uint8_t>(ControlMode::FIXED);
+        cfg.timings               = TrafficConfig::PROTOTYPE_TIMING_CONFIG;
+#endif
+        cfg.vehicleDriverType     = static_cast<uint8_t>(TrafficConfig::OutputDriverType::DIRECT_ACTIVE_HIGH);
+        cfg.pedDriverType         = static_cast<uint8_t>(TrafficConfig::OutputDriverType::LOW_SIDE_ULN2003A_ACTIVE_HIGH);
+        cfg.vehicleDriverVerified = TrafficConfig::VEHICLE_DRIVER_VERIFIED;
+        cfg.pedDriverVerified     = TrafficConfig::PED_ULN2003A_DRIVER_VERIFIED;
         cfg.sensors               = TrafficConfig::DEFAULT_SENSOR_CONFIG;
         cfg.demand                = TrafficConfig::DEFAULT_DEMAND_CONFIG;
         cfg.conflictMatrix        = TrafficConfig::DEFAULT_CONFLICT_MATRIX;
@@ -101,8 +112,13 @@ public:
             cfg.pedDriverType > static_cast<uint8_t>(TrafficConfig::OutputDriverType::LOW_SIDE_ULN2003A_ACTIVE_HIGH)) {
             return false;
         }
-        // Vehicle modules are 5V common-ground and MUST NOT use low-side ULN2003A
-        if (cfg.vehicleDriverType == static_cast<uint8_t>(TrafficConfig::OutputDriverType::LOW_SIDE_ULN2003A_ACTIVE_HIGH)) {
+        // A driver marked UNVERIFIED_SAFE_DISABLED cannot simultaneously claim to be verified
+        if (cfg.vehicleDriverVerified &&
+            cfg.vehicleDriverType == static_cast<uint8_t>(TrafficConfig::OutputDriverType::UNVERIFIED_SAFE_DISABLED)) {
+            return false;
+        }
+        if (cfg.pedDriverVerified &&
+            cfg.pedDriverType == static_cast<uint8_t>(TrafficConfig::OutputDriverType::UNVERIFIED_SAFE_DISABLED)) {
             return false;
         }
         if (!isTimingRangeValid(cfg.timings)) {
@@ -163,7 +179,7 @@ public:
         return true;
     }
 
-    bool load(PersistentControllerConfig& outCfg) {
+    NvsLoadStatus loadWithStatus(PersistentControllerConfig& outCfg) {
         PersistentControllerConfig candidate;
         memset(&candidate, 0, sizeof(candidate));
         bool readOk = false;
@@ -171,28 +187,62 @@ public:
 #if defined(ARDUINO) && defined(ESP32)
         if (useHardwareNvs_) {
             Preferences prefs;
-            if (prefs.begin(NVS_NAMESPACE, true)) {
+            // Open read-write so ESP32 NVS creates the namespace cleanly on first boot
+            // without logging an ESP_ERR_NVS_NOT_FOUND error.
+            if (prefs.begin(NVS_NAMESPACE, false)) {
+                if (!prefs.isKey(NVS_BLOB_KEY)) {
+                    outCfg = makeDefaultConfig();
+                    prefs.putBytes(NVS_BLOB_KEY, &outCfg, sizeof(outCfg));
+                    prefs.end();
+                    shadowBlob_    = outCfg;
+                    hasShadowBlob_ = true;
+                    return NvsLoadStatus::INITIALIZED_FIRST_BOOT;
+                }
                 const size_t len = prefs.getBytesLength(NVS_BLOB_KEY);
                 if (len == sizeof(candidate)) {
                     const size_t got = prefs.getBytes(NVS_BLOB_KEY, &candidate, sizeof(candidate));
                     readOk = (got == sizeof(candidate));
                 }
+                if (!readOk || !validateConfig(candidate)) {
+                    outCfg = makeDefaultConfig();
+                    // Self-heal corrupted NVS blob with safe defaults
+                    prefs.putBytes(NVS_BLOB_KEY, &outCfg, sizeof(outCfg));
+                    prefs.end();
+                    shadowBlob_    = outCfg;
+                    hasShadowBlob_ = true;
+                    return NvsLoadStatus::CORRUPTED_FALLBACK;
+                }
                 prefs.end();
+                outCfg         = candidate;
+                shadowBlob_    = candidate;
+                hasShadowBlob_ = true;
+                return NvsLoadStatus::LOADED_VALID;
             }
         }
 #endif
-        if (!readOk && hasShadowBlob_) {
+        if (!readOk) {
+            if (!hasShadowBlob_) {
+                outCfg         = makeDefaultConfig();
+                shadowBlob_    = outCfg;
+                hasShadowBlob_ = true;
+                return NvsLoadStatus::INITIALIZED_FIRST_BOOT;
+            }
             candidate = shadowBlob_;
             readOk    = true;
         }
 
         if (!readOk || !validateConfig(candidate)) {
             outCfg = makeDefaultConfig();
-            return false;
+            return NvsLoadStatus::CORRUPTED_FALLBACK;
         }
 
         outCfg = candidate;
-        return true;
+        return NvsLoadStatus::LOADED_VALID;
+    }
+
+    bool load(PersistentControllerConfig& outCfg) {
+        const NvsLoadStatus st = loadWithStatus(outCfg);
+        return (st == NvsLoadStatus::LOADED_VALID || st == NvsLoadStatus::INITIALIZED_FIRST_BOOT);
     }
 
     bool resetToDefaults(PersistentControllerConfig& outCfg) {
@@ -237,4 +287,3 @@ private:
 };
 
 #endif // CONFIGURATION_STORAGE_H
-

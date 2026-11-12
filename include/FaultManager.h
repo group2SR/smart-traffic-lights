@@ -67,6 +67,7 @@ public:
                 activeFaultMask_ &= static_cast<uint16_t>(~(
                     static_cast<uint16_t>(FaultCode::SENSOR_STUCK_ACTIVE) |
                     static_cast<uint16_t>(FaultCode::SENSOR_DISCONNECTED_CHATTER)));
+                refreshIdleFaultReason();
             }
         }
     }
@@ -79,8 +80,26 @@ public:
             pedButtonFaultMask_ &= static_cast<uint8_t>(~(1U << btnIdx));
             if (pedButtonFaultMask_ == 0) {
                 activeFaultMask_ &= static_cast<uint16_t>(~static_cast<uint16_t>(FaultCode::PED_BUTTON_STUCK_ACTIVE));
+                refreshIdleFaultReason();
             }
         }
+    }
+
+    void clearFaultBit(FaultCode code) {
+        activeFaultMask_ &= static_cast<uint16_t>(~static_cast<uint16_t>(code));
+        refreshIdleFaultReason();
+    }
+
+    void clearNonFatalFaults(uint32_t nowMs) {
+        if (criticalFaultLatched_) {
+            return;
+        }
+        activeFaultMask_    = 0;
+        sensorFaultMask_    = 0;
+        pedButtonFaultMask_ = 0;
+        lastFaultCode_      = FaultCode::NONE;
+        lastFaultReason_    = "NONE";
+        lastFaultTimeMs_    = nowMs;
     }
 
     // Explicit recovery procedure required to exit critical fault state
@@ -121,6 +140,13 @@ public:
     }
 
 private:
+    void refreshIdleFaultReason() {
+        if (activeFaultMask_ == 0 && !criticalFaultLatched_) {
+            lastFaultCode_   = FaultCode::NONE;
+            lastFaultReason_ = "NONE";
+        }
+    }
+
     uint16_t    activeFaultMask_;
     bool        criticalFaultLatched_;
     FaultCode   lastFaultCode_;

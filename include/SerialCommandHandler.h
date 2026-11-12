@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 #include <ctype.h>
 #include "TrafficController.h"
@@ -12,6 +13,31 @@ enum class SerialCommandResult : uint8_t {
     EMPTY_IGNORED       = 1,
     REJECTED_BY_STATE   = 2,
     UNKNOWN_INVALID_CMD = 3
+};
+
+struct DashboardStatusSnapshot {
+    uint32_t        timestampMs;
+    bool            rightHandTrafficRule;
+    OperatingMode   operatingMode;
+    ControlMode     controlMode;
+    TrafficState    currentFsmState;
+    uint32_t        stateElapsedMs;
+    bool            sideGapActive;
+    uint32_t        sideGapElapsedMs;
+    NextPhaseTarget nextTargetPhase;
+    bool            protectedTurnCommissioned;
+    bool            mainDemand;
+    bool            sideDemand;
+    bool            turnDemand;
+    bool            ped1Demand;
+    bool            ped2Demand;
+    bool            pedClearanceActive;
+    bool            physicalIrValid;
+    uint8_t         validatedIrMask;
+    SignalOutputs   outputs;
+    SignalOutputs   electricalOutputs;
+    uint16_t        activeFaultMask;
+    bool            valid;
 };
 
 class SerialCommandHandler {
@@ -27,7 +53,7 @@ public:
     SerialCommandResult executeCommand(uint32_t nowMs, const char* inputLine, TrafficController& ctrl) {
         if (!inputLine) return SerialCommandResult::UNKNOWN_INVALID_CMD;
 
-        char buf[96];
+        char buf[128];
         strncpy(buf, inputLine, sizeof(buf) - 1);
         buf[sizeof(buf) - 1] = '\0';
 
@@ -47,7 +73,7 @@ public:
         }
 
         // Convert to uppercase and collapse internal multiple spaces to single spaces
-        char normalized[96];
+        char normalized[128];
         size_t outIdx = 0;
         bool prevSpace = false;
         for (size_t i = 0; i < len && outIdx < (sizeof(normalized) - 1); ++i) {
@@ -88,9 +114,254 @@ public:
             emitLine("TIMING_PRINTED");
             return SerialCommandResult::OK_EXECUTED;
         }
+        if (strcmp(normalized, "TIMING PROTOTYPE") == 0 || strcmp(normalized, "TIMING FIXED") == 0) {
+            ctrl.setTimingConfig(nowMs, TrafficConfig::PROTOTYPE_TIMING_CONFIG);
+            emitLine("TIMING_PROTOTYPE_APPLIED");
+            return SerialCommandResult::OK_EXECUTED;
+        }
+        if (strcmp(normalized, "TIMING BENCH") == 0) {
+            ctrl.setTimingConfig(nowMs, TrafficConfig::BENCH_TIMING_CONFIG);
+            emitLine("TIMING_BENCH_APPLIED");
+            return SerialCommandResult::OK_EXECUTED;
+        }
+        if (strncmp(normalized, "TIMING MAIN ", 12) == 0) {
+            unsigned long minG = 0, yel = 0;
+            const int n = sscanf(normalized + 12, "%lu %lu", &minG, &yel);
+            if (n >= 1) {
+                TrafficConfig::TimingConfig tc = ctrl.getTimingConfig();
+                tc.mainMinGreenMs = minG;
+                if (n >= 2 && yel > 0) tc.mainYellowMs = yel;
+                if (tc.mainMaxGreenMs < tc.mainMinGreenMs) tc.mainMaxGreenMs = tc.mainMinGreenMs + 5000;
+                ctrl.setTimingConfig(nowMs, tc);
+                emitLine("TIMING_UPDATED");
+                return SerialCommandResult::OK_EXECUTED;
+            }
+        }
+        if (strncmp(normalized, "TIMING SIDE ", 12) == 0) {
+            unsigned long minG = 0, yel = 0;
+            const int n = sscanf(normalized + 12, "%lu %lu", &minG, &yel);
+            if (n >= 1) {
+                TrafficConfig::TimingConfig tc = ctrl.getTimingConfig();
+                tc.sideMinGreenMs = minG;
+                if (n >= 2 && yel > 0) tc.sideYellowMs = yel;
+                if (tc.sideMaxGreenMs < tc.sideMinGreenMs) tc.sideMaxGreenMs = tc.sideMinGreenMs + 5000;
+                ctrl.setTimingConfig(nowMs, tc);
+                emitLine("TIMING_UPDATED");
+                return SerialCommandResult::OK_EXECUTED;
+            }
+        }
+        if (strncmp(normalized, "TIMING ALL_RED ", 15) == 0 || strncmp(normalized, "TIMING ALLRED ", 14) == 0) {
+            unsigned long ar = 0;
+            const char* arg = (normalized[9] == 'R') ? (normalized + 14) : (normalized + 15);
+            if (sscanf(arg, "%lu", &ar) == 1) {
+                TrafficConfig::TimingConfig tc = ctrl.getTimingConfig();
+                tc.allRedMs = ar;
+                ctrl.setTimingConfig(nowMs, tc);
+                emitLine("TIMING_UPDATED");
+                return SerialCommandResult::OK_EXECUTED;
+            }
+        }
+        if (strncmp(normalized, "TIMING PED ", 11) == 0) {
+            unsigned long walk = 0, clear = 0;
+            const int n = sscanf(normalized + 11, "%lu %lu", &walk, &clear);
+            if (n >= 1) {
+                TrafficConfig::TimingConfig tc = ctrl.getTimingConfig();
+                tc.pedWalkMs = walk;
+                if (n >= 2 && clear > 0) tc.pedClearanceMs = clear;
+                ctrl.setTimingConfig(nowMs, tc);
+                emitLine("TIMING_UPDATED");
+                return SerialCommandResult::OK_EXECUTED;
+            }
+        }
         if (strcmp(normalized, "CONFIG") == 0) {
             emitLine("CONFIG_PRINTED");
             return SerialCommandResult::OK_EXECUTED;
+        }
+        if (strcmp(normalized, "COMMISSION") == 0 || strcmp(normalized, "COMMISSION STATUS") == 0) {
+            emitLine("COMMISSION_PRINTED");
+            return SerialCommandResult::OK_EXECUTED;
+        }
+
+        // Hardware driver topology configuration commands
+        if (strcmp(normalized, "DRIVER VEH HIGH_SIDE_ACTIVE_HIGH") == 0 ||
+            strcmp(normalized, "DRIVER VEH HIGH_SIDE_SOURCING_ACTIVE_HIGH") == 0) {
+            return ctrl.configureVehicleDriver(nowMs, TrafficConfig::OutputDriverType::HIGH_SIDE_SOURCING_ACTIVE_HIGH)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strcmp(normalized, "DRIVER VEH HIGH_SIDE_ACTIVE_LOW") == 0 ||
+            strcmp(normalized, "DRIVER VEH HIGH_SIDE_SOURCING_ACTIVE_LOW") == 0) {
+            return ctrl.configureVehicleDriver(nowMs, TrafficConfig::OutputDriverType::HIGH_SIDE_SOURCING_ACTIVE_LOW)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strcmp(normalized, "DRIVER VEH DIRECT_ACTIVE_HIGH") == 0 ||
+            strcmp(normalized, "DRIVER VEH DIRECT_LOGIC_ACTIVE_HIGH") == 0) {
+            return ctrl.configureVehicleDriver(nowMs, TrafficConfig::OutputDriverType::DIRECT_ACTIVE_HIGH)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strcmp(normalized, "DRIVER VEH LOW_SIDE_ULN2003A") == 0) {
+            return ctrl.configureVehicleDriver(nowMs, TrafficConfig::OutputDriverType::LOW_SIDE_ULN2003A_ACTIVE_HIGH)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strcmp(normalized, "DRIVER VEH DISABLED") == 0) {
+            return ctrl.configureVehicleDriver(nowMs, TrafficConfig::OutputDriverType::UNVERIFIED_SAFE_DISABLED)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+
+        if (strcmp(normalized, "DRIVER PED LOW_SIDE_ULN2003A") == 0 ||
+            strcmp(normalized, "DRIVER PED LOW_SIDE_ULN2003A_ACTIVE_HIGH") == 0) {
+            return ctrl.configurePedestrianDriver(nowMs, TrafficConfig::OutputDriverType::LOW_SIDE_ULN2003A_ACTIVE_HIGH)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strcmp(normalized, "DRIVER PED HIGH_SIDE_ACTIVE_HIGH") == 0) {
+            return ctrl.configurePedestrianDriver(nowMs, TrafficConfig::OutputDriverType::HIGH_SIDE_SOURCING_ACTIVE_HIGH)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strcmp(normalized, "DRIVER PED HIGH_SIDE_ACTIVE_LOW") == 0) {
+            return ctrl.configurePedestrianDriver(nowMs, TrafficConfig::OutputDriverType::HIGH_SIDE_SOURCING_ACTIVE_LOW)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strcmp(normalized, "DRIVER PED DIRECT_ACTIVE_HIGH") == 0 ||
+            strcmp(normalized, "DRIVER PED DIRECT_LOGIC_ACTIVE_HIGH") == 0) {
+            return ctrl.configurePedestrianDriver(nowMs, TrafficConfig::OutputDriverType::DIRECT_ACTIVE_HIGH)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strcmp(normalized, "DRIVER PED DISABLED") == 0) {
+            return ctrl.configurePedestrianDriver(nowMs, TrafficConfig::OutputDriverType::UNVERIFIED_SAFE_DISABLED)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+
+        // Runtime hardware commissioning commands
+        if (strcmp(normalized, "COMMISSION VEH ON") == 0) {
+            return ctrl.commissionVehicleDriver(nowMs, true)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strcmp(normalized, "COMMISSION VEH OFF") == 0) {
+            return ctrl.commissionVehicleDriver(nowMs, false)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strcmp(normalized, "COMMISSION PED ON") == 0) {
+            return ctrl.commissionPedestrianDriver(nowMs, true)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strcmp(normalized, "COMMISSION PED OFF") == 0) {
+            return ctrl.commissionPedestrianDriver(nowMs, false)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strcmp(normalized, "COMMISSION IR ALL ON") == 0) {
+            return ctrl.commissionAllIrSensors(nowMs, true)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strcmp(normalized, "COMMISSION IR ALL OFF") == 0) {
+            return ctrl.commissionAllIrSensors(nowMs, false)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strncmp(normalized, "COMMISSION IR ", 14) == 0) {
+            unsigned int chNum = 0;
+            char stateStr[8] = {0};
+            if (sscanf(normalized + 14, "%u %7s", &chNum, stateStr) == 2 &&
+                chNum >= 1 && chNum <= TrafficConfig::IR_SENSOR_COUNT) {
+                if (strcmp(stateStr, "ON") == 0) {
+                    return ctrl.commissionIrSensorChannel(nowMs, static_cast<uint8_t>(chNum - 1), true)
+                               ? SerialCommandResult::OK_EXECUTED
+                               : SerialCommandResult::REJECTED_BY_STATE;
+                }
+                if (strcmp(stateStr, "OFF") == 0) {
+                    return ctrl.commissionIrSensorChannel(nowMs, static_cast<uint8_t>(chNum - 1), false)
+                               ? SerialCommandResult::OK_EXECUTED
+                               : SerialCommandResult::REJECTED_BY_STATE;
+                }
+            }
+            emitLine("COMMAND_REJECTED_UNKNOWN");
+            return SerialCommandResult::UNKNOWN_INVALID_CMD;
+        }
+        if (strcmp(normalized, "COMMISSION TURN ON") == 0) {
+            return ctrl.commissionProtectedTurn(nowMs, true)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strcmp(normalized, "COMMISSION TURN OFF") == 0) {
+            return ctrl.commissionProtectedTurn(nowMs, false)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+
+        // Single-lamp commissioning test commands
+        if (strcmp(normalized, "LAMP OFF") == 0 || strcmp(normalized, "LAMP TEST OFF") == 0) {
+            ctrl.cancelLampDiagnostics(nowMs);
+            ctrl.stopLampTest(nowMs);
+            return SerialCommandResult::OK_EXECUTED;
+        }
+        if (strncmp(normalized, "LAMP TEST ", 10) == 0) {
+            const int8_t chIdx = SignalOutputDriver::parseChannelName(normalized + 10);
+            if (chIdx >= 0) {
+                return ctrl.startLampTest(nowMs, chIdx)
+                           ? SerialCommandResult::OK_EXECUTED
+                           : SerialCommandResult::REJECTED_BY_STATE;
+            }
+            emitLine("COMMAND_REJECTED_UNKNOWN");
+            return SerialCommandResult::UNKNOWN_INVALID_CMD;
+        }
+
+        // Automated individual lamp diagnostics
+        if (strcmp(normalized, "DIAG LAMPS") == 0) {
+            return ctrl.startLampDiagnostics(nowMs, 1000)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strncmp(normalized, "DIAG LAMPS ", 11) == 0) {
+            unsigned long dur = 1000;
+            if (sscanf(normalized + 11, "%lu", &dur) == 1) {
+                return ctrl.startLampDiagnostics(nowMs, dur)
+                           ? SerialCommandResult::OK_EXECUTED
+                           : SerialCommandResult::REJECTED_BY_STATE;
+            }
+            emitLine("COMMAND_REJECTED_UNKNOWN");
+            return SerialCommandResult::UNKNOWN_INVALID_CMD;
+        }
+        if (strcmp(normalized, "DIAG STOP") == 0 || strcmp(normalized, "DIAG CANCEL") == 0 ||
+            strcmp(normalized, "TEST STOP") == 0 || strcmp(normalized, "TEST ALL_GREEN STOP") == 0 ||
+            strcmp(normalized, "TEST ALL_GREEN CANCEL") == 0) {
+            ctrl.cancelLampDiagnostics(nowMs);
+            ctrl.cancelAllGreenDiagnostics(nowMs, "SERIAL_OPERATOR_ABORT");
+            return SerialCommandResult::OK_EXECUTED;
+        }
+        if (strcmp(normalized, "DIAG") == 0 || strcmp(normalized, "DIAG REPORT") == 0 ||
+            strcmp(normalized, "DIAG STATUS") == 0 || strcmp(normalized, "TEST ALL_GREEN REPORT") == 0) {
+            emitLine("DIAG_REPORT_PRINTED");
+            return SerialCommandResult::OK_EXECUTED;
+        }
+
+        // Controlled 10-Second ALL-GREEN Diagnostic Test (Hardware Bench Diagnostic Only)
+        if (strcmp(normalized, "TEST ALL_GREEN") == 0 || strcmp(normalized, "DIAG ALL_GREEN") == 0) {
+            return ctrl.startAllGreenDiagnostics(nowMs, 10000)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strncmp(normalized, "TEST ALL_GREEN ", 15) == 0) {
+            unsigned long durSec = 10;
+            if (sscanf(normalized + 15, "%lu", &durSec) == 1 && durSec >= 1 && durSec <= 30) {
+                return ctrl.startAllGreenDiagnostics(nowMs, durSec * 1000UL)
+                           ? SerialCommandResult::OK_EXECUTED
+                           : SerialCommandResult::REJECTED_BY_STATE;
+            }
+            emitLine("COMMAND_REJECTED_UNKNOWN");
+            return SerialCommandResult::UNKNOWN_INVALID_CMD;
         }
 
         // Mode commands
@@ -211,6 +482,10 @@ public:
             }
             if (ctrl.getMode() == OperatingMode::SERIAL_SIMULATION) {
                 ctrl.clearSimulatedDemand(nowMs);
+                ctrl.clearNonFatalFaults(nowMs);
+                return SerialCommandResult::OK_EXECUTED;
+            }
+            if (ctrl.clearNonFatalFaults(nowMs)) {
                 return SerialCommandResult::OK_EXECUTED;
             }
             return SerialCommandResult::REJECTED_BY_STATE;
@@ -244,6 +519,103 @@ public:
 
         emitLine("COMMAND_REJECTED_UNKNOWN");
         return SerialCommandResult::UNKNOWN_INVALID_CMD;
+    }
+
+    static DashboardStatusSnapshot captureStatusSnapshot(uint32_t nowMs, const TrafficController& ctrl) {
+        DashboardStatusSnapshot snap{};
+        snap.timestampMs               = nowMs;
+        snap.rightHandTrafficRule      = ctrl.getConflictMatrixConfig().rightHandTrafficRule;
+        snap.operatingMode             = ctrl.getMode();
+        snap.controlMode               = ctrl.getControlMode();
+        snap.currentFsmState           = ctrl.getState();
+        snap.stateElapsedMs            = ctrl.getStateElapsed(nowMs);
+        snap.sideGapActive             = ctrl.isSideGapTimerActive();
+        snap.sideGapElapsedMs          = ctrl.getSideGapElapsed(nowMs);
+        snap.nextTargetPhase           = ctrl.getNextTarget();
+        snap.protectedTurnCommissioned = ctrl.isProtectedTurnCommissioned();
+        snap.mainDemand                = ctrl.hasMainVehicleDemand();
+        snap.sideDemand                = ctrl.hasSideVehicleDemand();
+        snap.turnDemand                = ctrl.hasTurnVehicleDemand();
+        snap.ped1Demand                = ctrl.hasPedestrianChannelDemand(0);
+        snap.ped2Demand                = ctrl.hasPedestrianChannelDemand(1);
+        snap.pedClearanceActive        = ctrl.isPedestrianClearanceActive();
+        snap.validatedIrMask           = ctrl.getSensorConfig().sensorValidatedMask;
+        snap.physicalIrValid           = (snap.validatedIrMask != 0);
+        snap.outputs                   = ctrl.getOutputs();
+        const ElectricalPinStates& elSt = ctrl.getOutputDriver().getLastElectricalStates();
+        snap.electricalOutputs.mainGreen    = elSt.pinHigh[0];
+        snap.electricalOutputs.mainYellow   = elSt.pinHigh[1];
+        snap.electricalOutputs.mainRed      = elSt.pinHigh[2];
+        snap.electricalOutputs.sideGreen    = elSt.pinHigh[3];
+        snap.electricalOutputs.sideYellow   = elSt.pinHigh[4];
+        snap.electricalOutputs.sideRed      = elSt.pinHigh[5];
+        snap.electricalOutputs.turnGreen    = elSt.pinHigh[6];
+        snap.electricalOutputs.turnYellow   = elSt.pinHigh[7];
+        snap.electricalOutputs.turnRed      = elSt.pinHigh[8];
+        snap.electricalOutputs.pedWalk      = elSt.pinHigh[9];
+        snap.electricalOutputs.pedDontWalk  = elSt.pinHigh[10];
+        snap.electricalOutputs.ped2Walk     = elSt.pinHigh[11];
+        snap.electricalOutputs.ped2DontWalk = elSt.pinHigh[12];
+        snap.activeFaultMask           = ctrl.getFaultManager().getActiveFaultMask();
+        snap.valid                     = snap.rightHandTrafficRule;
+        return snap;
+    }
+
+    static void formatLogicalOutputsLine(const SignalOutputs& out, char* buf, size_t bufSize) {
+        if (!buf || bufSize == 0) return;
+        snprintf(buf, bufSize,
+                 "MAIN[G=%d Y=%d R=%d] SIDE[G=%d Y=%d R=%d] TURN[G=%d Y=%d R=%d] PED1[W=%d DW=%d] PED2[W=%d DW=%d]",
+                 out.mainGreen ? 1 : 0, out.mainYellow ? 1 : 0, out.mainRed ? 1 : 0,
+                 out.sideGreen ? 1 : 0, out.sideYellow ? 1 : 0, out.sideRed ? 1 : 0,
+                 out.turnGreen ? 1 : 0, out.turnYellow ? 1 : 0, out.turnRed ? 1 : 0,
+                 out.pedWalk ? 1 : 0, out.pedDontWalk ? 1 : 0,
+                 out.ped2Walk ? 1 : 0, out.ped2DontWalk ? 1 : 0);
+    }
+
+    static void formatElectricalPinStatesLine(const ElectricalPinStates& st, char* buf, size_t bufSize) {
+        if (!buf || bufSize == 0) return;
+        snprintf(buf, bufSize,
+                 "MAIN[G=%d Y=%d R=%d] SIDE[G=%d Y=%d R=%d] TURN[G=%d Y=%d R=%d] PED1[W=%d DW=%d] PED2[W=%d DW=%d]",
+                 st.pinHigh[0] ? 1 : 0, st.pinHigh[1] ? 1 : 0, st.pinHigh[2] ? 1 : 0,
+                 st.pinHigh[3] ? 1 : 0, st.pinHigh[4] ? 1 : 0, st.pinHigh[5] ? 1 : 0,
+                 st.pinHigh[6] ? 1 : 0, st.pinHigh[7] ? 1 : 0, st.pinHigh[8] ? 1 : 0,
+                 st.pinHigh[9] ? 1 : 0, st.pinHigh[10] ? 1 : 0,
+                 st.pinHigh[11] ? 1 : 0, st.pinHigh[12] ? 1 : 0);
+    }
+
+    static bool parseLogicalOutputsLine(const char* line, SignalOutputs& out) {
+        if (!line) return false;
+        int mg = 0, my = 0, mr = 0;
+        int sg = 0, sy = 0, sr = 0;
+        int tg = 0, ty = 0, tr = 0;
+        int p1w = 0, p1dw = 0;
+        int p2w = 0, p2dw = 0;
+
+        const char* start = strstr(line, "MAIN[");
+        if (!start) start = line;
+
+        const int matched = sscanf(
+            start,
+            "MAIN[G=%d Y=%d R=%d] SIDE[G=%d Y=%d R=%d] TURN[G=%d Y=%d R=%d] PED1[W=%d DW=%d] PED2[W=%d DW=%d]",
+            &mg, &my, &mr, &sg, &sy, &sr, &tg, &ty, &tr, &p1w, &p1dw, &p2w, &p2dw);
+
+        if (matched == 13) {
+            out.mainGreen    = (mg != 0);
+            out.mainYellow   = (my != 0);
+            out.mainRed      = (mr != 0);
+            out.sideGreen    = (sg != 0);
+            out.sideYellow   = (sy != 0);
+            out.sideRed      = (sr != 0);
+            out.turnGreen    = (tg != 0);
+            out.turnYellow   = (ty != 0);
+            out.turnRed      = (tr != 0);
+            out.pedWalk      = (p1w != 0);
+            out.pedDontWalk  = (p1dw != 0);
+            out.ped2Walk     = (p2w != 0);
+            out.ped2DontWalk = (p2dw != 0);
+            return true;
+        }
+        return false;
     }
 
 private:

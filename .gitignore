@@ -20,6 +20,7 @@ compile_commands.json
 .idea/
 
 # Temporary Files & Local Snapshots
+scratch/
 *.tmp
 *.temp
 *.log

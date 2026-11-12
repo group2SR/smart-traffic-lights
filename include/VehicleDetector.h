@@ -6,26 +6,44 @@
 #include "FaultManager.h"
 
 // ============================================================================
-// VEHICLE DETECTOR MODULE (6 Independent IR Presence Sensors)
+// VEHICLE DETECTOR MODULE (6 Independent IR Presence Sensors — 2 Per Road)
 // ============================================================================
+// Locked Hardware Sensor-to-Road Architecture:
+//   - Main Road      : Sensor 1 = GPIO 33 (Ch 0, INPUT_PULLUP)
+//                      Sensor 2 = GPIO 34 (Ch 1, INPUT - input-only)
+//   - Side Road      : Sensor 1 = GPIO 35 (Ch 2, INPUT - input-only)
+//                      Sensor 2 = GPIO 36 (Ch 3, INPUT - input-only)
+//   - Turn Movement  : Sensor 1 = GPIO 39 (Ch 4, INPUT - input-only)
+//                      Sensor 2 = GPIO 15 (Ch 5, INPUT_PULLUP - MTDO strap)
+//
 // Responsibilities:
-// - Read all 6 IR sensors independently (IR1..IR6).
-// - Filter noisy sensor readings using configurable stability/debounce window.
-// - Detect vehicle presence and absence per sensor and per assigned movement.
+// - Read all 6 IR sensors independently (IR1..IR6), two per road (First & Second).
+// - Maintain independent raw input state, debounced state, and latched demand per sensor.
+// - Filter noisy sensor readings using configurable stability/debounce window (100 ms).
+// - Detect vehicle presence and absence per sensor position and per assigned road.
 // - Detect stuck-active sensors (> maxInputStuckMs) and floating/chattering
 //   inputs (> IR_MAX_TRANSITIONS_PER_WINDOW within 1 s) and isolate faulty
-//   channels so a bad sensor never causes an unsafe green or monopolizes a phase.
+//   channels so a bad sensor never causes an unsafe green or blinds the second
+//   sensor on the same road.
 // - NOTE: IR obstacle sensors are strictly vehicle-presence detectors. They are
 //   NEVER interpreted as speed detectors, vehicle counters, or emergency detectors.
 
 struct IrChannelStatus {
-    bool     rawDetected;
-    bool     stableDetected;
-    bool     latchedDemand;
-    bool     stuckFault;
-    bool     chatterFault;
-    bool     validated;
-    uint8_t  assignedMovement; // MovementId (0=MAIN, 1=SIDE, 2=TURN)
+    uint8_t  gpioPin;              // Locked physical ESP32 GPIO pin (33, 34, 35, 36, 39, 15)
+    uint8_t  assignedMovement;     // MovementId (0=MAIN_ROAD, 1=SIDE_ROAD, 2=PROTECTED_TURN)
+    uint8_t  sensorPositionOnRoad; // 0 = First sensor (Sensor 1), 1 = Second sensor (Sensor 2)
+    bool     rawPinHigh;           // Independent raw GPIO pin level (true = HIGH, false = LOW)
+    bool     rawDetected;          // Instantaneous active-LOW obstacle state
+    bool     stableDetected;       // Debounced obstacle presence state
+    bool     latchedDemand;        // Latched vehicle demand awaiting phase service
+    bool     stuckFault;           // True if continuously active > maxInputStuckMs
+    bool     chatterFault;         // True if oscillating > IR_MAX_TRANSITIONS_PER_WINDOW / s
+    bool     validated;            // True if physical sensor channel is commissioned
+    bool     cycleObserved;        // True if a full clean detect + release cycle has been observed
+    bool     rawShadowDetected;    // Internal electrical shadow state for pre-commissioning check
+    uint16_t rawSampleCount;       // Total raw electrical samples collected (saturating)
+    uint16_t detectionCount;       // Number of debounced vehicle arrivals detected
+    uint16_t releaseCount;         // Number of debounced vehicle departures (releases) detected
     uint32_t lastChangeMs;
     uint32_t activeStartMs;
     uint32_t chatterWindowStartMs;
@@ -34,23 +52,32 @@ struct IrChannelStatus {
 
 class VehicleDetector {
 public:
-    VehicleDetector() {
+    VehicleDetector() : config_(TrafficConfig::DEFAULT_SENSOR_CONFIG) {
         applySensorConfig(TrafficConfig::DEFAULT_SENSOR_CONFIG);
         reset(0);
     }
 
     void reset(uint32_t nowMs) {
+        lastSampleMs_ = nowMs;
         for (uint8_t i = 0; i < TrafficConfig::IR_SENSOR_COUNT; ++i) {
+            channels_[i].gpioPin                 = TrafficConfig::IR_SENSOR_PINS[i];
+            channels_[i].rawPinHigh              = true;
             channels_[i].rawDetected             = false;
             channels_[i].stableDetected          = false;
             channels_[i].latchedDemand           = false;
             channels_[i].stuckFault              = false;
             channels_[i].chatterFault            = false;
+            channels_[i].cycleObserved           = false;
+            channels_[i].rawShadowDetected       = false;
+            channels_[i].rawSampleCount          = 0;
+            channels_[i].detectionCount          = 0;
+            channels_[i].releaseCount            = 0;
             channels_[i].lastChangeMs            = nowMs;
             channels_[i].activeStartMs           = nowMs;
             channels_[i].chatterWindowStartMs    = nowMs;
             channels_[i].transitionCountInWindow = 0;
         }
+        recomputeSensorPositionsOnRoads();
     }
 
     bool applySensorConfig(const TrafficConfig::SensorConfig& cfg) {
@@ -73,9 +100,11 @@ public:
                 config_.sensorToMovement[i] = TrafficConfig::DEFAULT_SENSOR_CONFIG.sensorToMovement[i];
                 valid = false;
             }
+            channels_[i].gpioPin          = TrafficConfig::IR_SENSOR_PINS[i];
             channels_[i].assignedMovement = config_.sensorToMovement[i];
-            channels_[i].validated = ((config_.sensorValidatedMask & (1U << i)) != 0);
+            channels_[i].validated        = ((config_.sensorValidatedMask & (1U << i)) != 0);
         }
+        recomputeSensorPositionsOnRoads();
         return valid;
     }
 
@@ -111,20 +140,90 @@ public:
         return channels_[idx].validated;
     }
 
+    bool isAnyChannelValidated() const {
+        return (config_.sensorValidatedMask & 0x3FU) != 0;
+    }
+
+    bool isAllChannelsValidated() const {
+        return (config_.sensorValidatedMask & 0x3FU) == 0x3FU;
+    }
+
+    uint8_t getValidatedMask() const {
+        return static_cast<uint8_t>(config_.sensorValidatedMask & 0x3FU);
+    }
+
+    // Electrical input validation check for commissioning a physical IR channel
+    bool validateChannelElectricalHealth(uint8_t idx, const char** failureReason = nullptr) const {
+        if (idx >= TrafficConfig::IR_SENSOR_COUNT) {
+            if (failureReason) *failureReason = "Invalid IR sensor channel index";
+            return false;
+        }
+        const IrChannelStatus& ch = channels_[idx];
+        if (ch.rawSampleCount == 0) {
+            if (failureReason) *failureReason = "IR sensor GPIO has not been sampled yet";
+            return false;
+        }
+        if (ch.stuckFault) {
+            if (failureReason) *failureReason = "IR sensor channel has active stuck-low fault";
+            return false;
+        }
+        if (ch.chatterFault) {
+            if (failureReason) *failureReason = "IR sensor channel has active chatter/oscillation fault";
+            return false;
+        }
+        if (!ch.rawPinHigh) {
+            if (failureReason) *failureReason = "IR sensor GPIO is held LOW (check 3.3V pull-up / sensor power / active obstacle)";
+            return false;
+        }
+        if (!ch.cycleObserved) {
+            if (failureReason) *failureReason = "IR sensor requires physical detect-and-release cycle (Cycle=YES); idle HIGH alone is insufficient";
+            return false;
+        }
+        return true;
+    }
+
+    void updateRawPinSampleOnly(uint8_t idx, bool rawPinHigh) {
+        if (idx >= TrafficConfig::IR_SENSOR_COUNT) return;
+        IrChannelStatus& ch = channels_[idx];
+        ch.rawPinHigh = rawPinHigh;
+        if (ch.rawSampleCount < 0xFFFFU) {
+            ch.rawSampleCount++;
+        }
+        const bool detected = TrafficConfig::IR_SNS_ACTIVE_LOW ? !rawPinHigh : rawPinHigh;
+        if (detected && !ch.rawShadowDetected) {
+            ch.rawShadowDetected = true;
+        } else if (!detected && ch.rawShadowDetected) {
+            ch.rawShadowDetected = false;
+            ch.cycleObserved     = true;
+        }
+    }
+
     // Update a single IR sensor channel from raw GPIO pin state (HIGH = true, LOW = false)
     // Returns true if a new vehicle arrival was latched on this tick.
     bool updateChannel(uint8_t idx, uint32_t nowMs, bool rawPinHigh, FaultManager& faultMgr) {
         if (idx >= TrafficConfig::IR_SENSOR_COUNT) return false;
+        lastSampleMs_ = nowMs;
         IrChannelStatus& ch = channels_[idx];
+        ch.rawPinHigh = rawPinHigh;
+        if (ch.rawSampleCount < 0xFFFFU) {
+            ch.rawSampleCount++;
+        }
+
+        const bool detected = TrafficConfig::IR_SNS_ACTIVE_LOW ? !rawPinHigh : rawPinHigh;
 
         if (!ch.validated) {
+            // Track pre-commissioning shadow cycle (detect -> release) without triggering demand
+            if (detected && !ch.rawShadowDetected) {
+                ch.rawShadowDetected = true;
+            } else if (!detected && ch.rawShadowDetected) {
+                ch.rawShadowDetected = false;
+                ch.cycleObserved     = true;
+            }
             ch.rawDetected    = false;
             ch.stableDetected = false;
             ch.latchedDemand  = false;
             return false;
         }
-
-        const bool detected = TrafficConfig::IR_SNS_ACTIVE_LOW ? !rawPinHigh : rawPinHigh;
 
         // Chatter / disconnected floating input supervision
         if ((nowMs - ch.chatterWindowStartMs) >= TrafficConfig::IR_CHATTER_WINDOW_MS) {
@@ -165,11 +264,18 @@ public:
                     ch.activeStartMs = nowMs;
                     ch.stuckFault    = false;
                     faultMgr.setSensorFaultBit(idx, false);
+                    if (ch.detectionCount < 0xFFFFU) {
+                        ch.detectionCount++;
+                    }
                     if (!ch.latchedDemand) {
                         ch.latchedDemand = true;
                         newArrival       = true;
                     }
                 } else {
+                    if (ch.releaseCount < 0xFFFFU) {
+                        ch.releaseCount++;
+                    }
+                    ch.cycleObserved = true;
                     if (ch.stuckFault) {
                         ch.stuckFault = false;
                         faultMgr.setSensorFaultBit(idx, false);
@@ -190,6 +296,7 @@ public:
 
     void clearInvalidAdapterState(uint32_t nowMs) {
         for (uint8_t i = 0; i < TrafficConfig::IR_SENSOR_COUNT; ++i) {
+            channels_[i].rawPinHigh     = true;
             channels_[i].rawDetected    = false;
             channels_[i].stableDetected = false;
             channels_[i].lastChangeMs   = nowMs;
@@ -241,6 +348,59 @@ public:
         return count;
     }
 
+    // Look up sensor channel index (0..5) for a given road and sensor position (0 = Sensor 1, 1 = Sensor 2)
+    int8_t getRoadSensorChannelIndex(TrafficConfig::MovementId road, uint8_t sensorPosition) const {
+        const uint8_t r = static_cast<uint8_t>(road);
+        if (r >= TrafficConfig::VEHICLE_GROUP_COUNT || sensorPosition >= TrafficConfig::SENSORS_PER_ROAD) {
+            return -1;
+        }
+        uint8_t matchOrder = 0;
+        for (uint8_t i = 0; i < TrafficConfig::IR_SENSOR_COUNT; ++i) {
+            if (channels_[i].assignedMovement == r) {
+                if (matchOrder == sensorPosition) {
+                    return static_cast<int8_t>(i);
+                }
+                matchOrder++;
+            }
+        }
+        return static_cast<int8_t>(TrafficConfig::ROAD_IR_SENSOR_CHANNELS[r][sensorPosition]);
+    }
+
+    const IrChannelStatus& getRoadSensor(TrafficConfig::MovementId road, uint8_t sensorPosition) const {
+        const int8_t idx = getRoadSensorChannelIndex(road, sensorPosition);
+        return channels_[(idx >= 0 && idx < TrafficConfig::IR_SENSOR_COUNT) ? idx : 0];
+    }
+
+    bool isRoadSensorDetected(TrafficConfig::MovementId road, uint8_t sensorPosition) const {
+        const int8_t idx = getRoadSensorChannelIndex(road, sensorPosition);
+        if (idx < 0) return false;
+        const IrChannelStatus& ch = channels_[idx];
+        return ch.validated && !ch.stuckFault && !ch.chatterFault && ch.stableDetected;
+    }
+
+    bool isRoadSensorLatched(TrafficConfig::MovementId road, uint8_t sensorPosition) const {
+        const int8_t idx = getRoadSensorChannelIndex(road, sensorPosition);
+        if (idx < 0) return false;
+        const IrChannelStatus& ch = channels_[idx];
+        return ch.validated && !ch.stuckFault && !ch.chatterFault && ch.latchedDemand;
+    }
+
+    bool isRoadSensorFaulted(TrafficConfig::MovementId road, uint8_t sensorPosition) const {
+        const int8_t idx = getRoadSensorChannelIndex(road, sensorPosition);
+        if (idx < 0) return false;
+        const IrChannelStatus& ch = channels_[idx];
+        return ch.stuckFault || ch.chatterFault;
+    }
+
+    int8_t findChannelByGpio(uint8_t gpioPin) const {
+        for (uint8_t i = 0; i < TrafficConfig::IR_SENSOR_COUNT; ++i) {
+            if (TrafficConfig::IR_SENSOR_PINS[i] == gpioPin) {
+                return static_cast<int8_t>(i);
+            }
+        }
+        return -1;
+    }
+
     const IrChannelStatus& getChannel(uint8_t idx) const {
         return channels_[idx < TrafficConfig::IR_SENSOR_COUNT ? idx : 0];
     }
@@ -252,10 +412,52 @@ public:
         return false;
     }
 
+    bool isApproachFaulted(TrafficConfig::MovementId road) const {
+        return isRoadSensorFaulted(road, 0) || isRoadSensorFaulted(road, 1);
+    }
+
+    bool isApproachDemand(TrafficConfig::MovementId road) const {
+        return hasDemandForMovement(road);
+    }
+
+    bool isApproachPresence(TrafficConfig::MovementId road) const {
+        return hasActivePresenceForMovement(road);
+    }
+
+    bool isAnySensorFaulted() const {
+        return isAnyChannelFaulted();
+    }
+
+    bool isAnySensorStale(uint32_t nowMs, uint32_t staleTimeoutMs = 5000) const {
+        if (nowMs < lastSampleMs_) return false;
+        return (nowMs - lastSampleMs_) >= staleTimeoutMs;
+    }
+
+    void noteSensorSample(uint32_t nowMs) {
+        lastSampleMs_ = nowMs;
+    }
+
+    uint32_t getLastSampleTime() const {
+        return lastSampleMs_;
+    }
+
 private:
+    void recomputeSensorPositionsOnRoads() {
+        uint8_t roadCounts[TrafficConfig::VEHICLE_GROUP_COUNT] = { 0, 0, 0 };
+        for (uint8_t i = 0; i < TrafficConfig::IR_SENSOR_COUNT; ++i) {
+            const uint8_t m = channels_[i].assignedMovement;
+            if (m < TrafficConfig::VEHICLE_GROUP_COUNT) {
+                channels_[i].sensorPositionOnRoad = roadCounts[m];
+                roadCounts[m]++;
+            } else {
+                channels_[i].sensorPositionOnRoad = 0;
+            }
+        }
+    }
+
     TrafficConfig::SensorConfig config_;
     IrChannelStatus channels_[TrafficConfig::IR_SENSOR_COUNT];
+    uint32_t lastSampleMs_;
 };
 
 #endif // VEHICLE_DETECTOR_H
-

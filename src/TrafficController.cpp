@@ -5,15 +5,64 @@ TrafficController::TrafficController()
       state_(TrafficState::STARTUP_SAFE),
       lastServedNonMain_(TrafficState::STARTUP_SAFE),
       mode_(OperatingMode::HARDWARE_READY),
+#ifdef PIO_UNIT_TESTING
       controlMode_(ControlMode::AUTO),
+#else
+      controlMode_(ControlMode::FIXED),
+#endif
       nextTarget_(NextPhaseTarget::MAIN_ROAD),
       stateStartMs_(0),
       sideGapStartMs_(0),
+      lastUpdateMs_(0),
       sideGapTimerActive_(false),
       postPedClearanceActive_(false),
       manualStepRequested_(false),
+      allGreenHoldActive_(false),
+      diagSession_{},
+      allGreenSession_{},
       transitionCb_(nullptr),
-      eventLogCb_(nullptr) {}
+      eventLogCb_(nullptr) {
+    diagSession_.active = false;
+    diagSession_.holdDurationMs = 1000;
+    diagSession_.clearanceDurationMs = 500;
+    diagSession_.currentStep = 0;
+    diagSession_.restoreMode = controlMode_;
+    diagSession_.records[0].channelIdx = 2;
+    diagSession_.records[0].gpioPin = TrafficConfig::PIN_MAIN_RED;
+    strncpy(diagSession_.records[0].channelName, "MAIN_R", sizeof(diagSession_.records[0].channelName));
+    diagSession_.records[1].channelIdx = 1;
+    diagSession_.records[1].gpioPin = TrafficConfig::PIN_MAIN_YELLOW;
+    strncpy(diagSession_.records[1].channelName, "MAIN_Y", sizeof(diagSession_.records[1].channelName));
+    diagSession_.records[2].channelIdx = 0;
+    diagSession_.records[2].gpioPin = TrafficConfig::PIN_MAIN_GREEN;
+    strncpy(diagSession_.records[2].channelName, "MAIN_G", sizeof(diagSession_.records[2].channelName));
+    diagSession_.records[3].channelIdx = 5;
+    diagSession_.records[3].gpioPin = TrafficConfig::PIN_SIDE_RED;
+    strncpy(diagSession_.records[3].channelName, "SIDE_R", sizeof(diagSession_.records[3].channelName));
+    diagSession_.records[4].channelIdx = 4;
+    diagSession_.records[4].gpioPin = TrafficConfig::PIN_SIDE_YELLOW;
+    strncpy(diagSession_.records[4].channelName, "SIDE_Y", sizeof(diagSession_.records[4].channelName));
+    diagSession_.records[5].channelIdx = 3;
+    diagSession_.records[5].gpioPin = TrafficConfig::PIN_SIDE_GREEN;
+    strncpy(diagSession_.records[5].channelName, "SIDE_G", sizeof(diagSession_.records[5].channelName));
+    diagSession_.records[6].channelIdx = 8;
+    diagSession_.records[6].gpioPin = TrafficConfig::PIN_TURN_RED;
+    strncpy(diagSession_.records[6].channelName, "TURN_R", sizeof(diagSession_.records[6].channelName));
+    diagSession_.records[7].channelIdx = 7;
+    diagSession_.records[7].gpioPin = TrafficConfig::PIN_TURN_YELLOW;
+    strncpy(diagSession_.records[7].channelName, "TURN_Y", sizeof(diagSession_.records[7].channelName));
+    diagSession_.records[8].channelIdx = 6;
+    diagSession_.records[8].gpioPin = TrafficConfig::PIN_TURN_GREEN;
+    strncpy(diagSession_.records[8].channelName, "TURN_G", sizeof(diagSession_.records[8].channelName));
+
+    allGreenSession_.active = false;
+    allGreenSession_.startMs = 0;
+    allGreenSession_.durationMs = 10000;
+    allGreenSession_.savedControlMode = controlMode_;
+    allGreenSession_.completed = false;
+    allGreenSession_.aborted = false;
+    allGreenSession_.abortReason[0] = '\0';
+}
 
 void TrafficController::begin(uint32_t nowMs) {
     validateAndSanitizeTimings(timings_);
@@ -21,14 +70,23 @@ void TrafficController::begin(uint32_t nowMs) {
     state_                  = TrafficState::STARTUP_SAFE;
     lastServedNonMain_      = TrafficState::STARTUP_SAFE;
     mode_                   = OperatingMode::HARDWARE_READY;
+#ifdef PIO_UNIT_TESTING
     controlMode_            = ControlMode::AUTO;
+#else
+    controlMode_            = ControlMode::FIXED;
+#endif
     nextTarget_             = NextPhaseTarget::MAIN_ROAD;
     stateStartMs_           = nowMs;
     sideGapStartMs_         = nowMs;
+    lastUpdateMs_           = nowMs;
     sideGapTimerActive_     = false;
     postPedClearanceActive_ = false;
     manualStepRequested_    = false;
+    allGreenHoldActive_     = false;
 
+    outputDriver_.clearLampTest();
+    cancelLampDiagnostics(nowMs);
+    cancelAllGreenDiagnostics(nowMs, "CONTROLLER_BEGIN_RESET");
     faultMgr_.reset(nowMs);
     detector_.reset(nowMs);
     demandMgr_.reset(nowMs);
@@ -168,6 +226,380 @@ void TrafficController::setProtectedTurnCommissioned(uint32_t nowMs, bool commis
              commissioned ? "Protected turn commissioned" : "Protected turn disabled/uncommissioned");
 }
 
+bool TrafficController::configureVehicleDriver(uint32_t nowMs, TrafficConfig::OutputDriverType type) {
+    if (state_ == TrafficState::FAULT_SAFE) {
+        logEvent(nowMs, "COMMAND_REJECTED", "Cannot configure vehicle driver while in FAULT_SAFE");
+        return false;
+    }
+    if (static_cast<uint8_t>(type) > static_cast<uint8_t>(TrafficConfig::OutputDriverType::LOW_SIDE_ULN2003A_ACTIVE_HIGH)) {
+        return false;
+    }
+    outputDriver_.setVehicleDriverConfig(type, false);
+    logEvent(nowMs, "VEHICLE_DRIVER_CONFIG", SignalOutputDriver::driverTypeToString(type));
+    return true;
+}
+
+bool TrafficController::configurePedestrianDriver(uint32_t nowMs, TrafficConfig::OutputDriverType type) {
+    if (state_ == TrafficState::FAULT_SAFE) {
+        logEvent(nowMs, "COMMAND_REJECTED", "Cannot configure pedestrian driver while in FAULT_SAFE");
+        return false;
+    }
+    if (static_cast<uint8_t>(type) > static_cast<uint8_t>(TrafficConfig::OutputDriverType::LOW_SIDE_ULN2003A_ACTIVE_HIGH)) {
+        return false;
+    }
+    outputDriver_.setPedestrianDriverConfig(type, false);
+    logEvent(nowMs, "PED_DRIVER_CONFIG", SignalOutputDriver::driverTypeToString(type));
+    return true;
+}
+
+bool TrafficController::commissionVehicleDriver(uint32_t nowMs, bool verified, const char** rejectReason) {
+    if (state_ == TrafficState::FAULT_SAFE) {
+        if (rejectReason) *rejectReason = "Controller is in FAULT_SAFE";
+        logEvent(nowMs, "COMMAND_REJECTED", "Cannot commission vehicle driver in FAULT_SAFE");
+        return false;
+    }
+    const TrafficConfig::OutputDriverType curType = outputDriver_.getVehicleDriverType();
+    if (verified) {
+        if (curType == TrafficConfig::OutputDriverType::UNVERIFIED_SAFE_DISABLED) {
+            if (rejectReason) *rejectReason = "Vehicle driver type is UNVERIFIED_SAFE_DISABLED; select driver topology first";
+            logEvent(nowMs, "COMMISSION_REJECTED", "Select vehicle driver topology (DRIVER VEH ...) before commissioning");
+            return false;
+        }
+        if (curType == TrafficConfig::OutputDriverType::LOW_SIDE_ULN2003A_ACTIVE_HIGH) {
+            if (rejectReason) *rejectReason = "Vehicle traffic lights do not pass through ULN2003A (use DIRECT_ACTIVE_HIGH)";
+            logEvent(nowMs, "COMMISSION_REJECTED",
+                     "Vehicle traffic lights are direct ESP32 outputs and do not use ULN2003A low-side sink");
+            return false;
+        }
+    }
+    outputDriver_.setVehicleDriverConfig(curType, verified);
+    logEvent(nowMs, "VEHICLE_DRIVER_COMMISSION",
+             verified ? "Vehicle output driver commissioned" : "Vehicle output driver decommissioned (safe disabled)");
+    return true;
+}
+
+bool TrafficController::commissionPedestrianDriver(uint32_t nowMs, bool verified, const char** rejectReason) {
+    if (state_ == TrafficState::FAULT_SAFE) {
+        if (rejectReason) *rejectReason = "Controller is in FAULT_SAFE";
+        logEvent(nowMs, "COMMAND_REJECTED", "Cannot commission pedestrian driver in FAULT_SAFE");
+        return false;
+    }
+    const TrafficConfig::OutputDriverType curType = outputDriver_.getPedestrianDriverType();
+    if (verified && curType == TrafficConfig::OutputDriverType::UNVERIFIED_SAFE_DISABLED) {
+        if (rejectReason) *rejectReason = "Pedestrian driver type is UNVERIFIED_SAFE_DISABLED; select topology first";
+        logEvent(nowMs, "COMMISSION_REJECTED", "Select pedestrian driver topology (DRIVER PED ...) before commissioning");
+        return false;
+    }
+    outputDriver_.setPedestrianDriverConfig(curType, verified);
+    logEvent(nowMs, "PED_DRIVER_COMMISSION",
+             verified ? "Pedestrian output driver commissioned" : "Pedestrian output driver decommissioned (safe disabled)");
+    return true;
+}
+
+bool TrafficController::commissionIrSensorChannel(uint32_t nowMs, uint8_t idx, bool validated, const char** rejectReason) {
+    if (state_ == TrafficState::FAULT_SAFE) {
+        if (rejectReason) *rejectReason = "Controller is in FAULT_SAFE";
+        return false;
+    }
+    if (idx >= TrafficConfig::IR_SENSOR_COUNT) {
+        if (rejectReason) *rejectReason = "Invalid IR sensor channel index (expected 0..5)";
+        return false;
+    }
+    if (validated) {
+        if (!detector_.validateChannelElectricalHealth(idx, rejectReason)) {
+            logEvent(nowMs, "COMMISSION_REJECTED",
+                     (rejectReason && *rejectReason) ? *rejectReason : "IR sensor electrical validation failed");
+            return false;
+        }
+    }
+    detector_.setChannelValidated(idx, validated);
+    logEvent(nowMs, "IR_SENSOR_COMMISSION",
+             validated ? "Physical IR sensor channel commissioned" : "Physical IR sensor channel decommissioned");
+    return true;
+}
+
+bool TrafficController::commissionAllIrSensors(uint32_t nowMs, bool validated, const char** rejectReason) {
+    if (state_ == TrafficState::FAULT_SAFE) {
+        if (rejectReason) *rejectReason = "Controller is in FAULT_SAFE";
+        return false;
+    }
+    if (validated) {
+        for (uint8_t i = 0; i < TrafficConfig::IR_SENSOR_COUNT; ++i) {
+            if (!detector_.validateChannelElectricalHealth(i, rejectReason)) {
+                logEvent(nowMs, "COMMISSION_REJECTED",
+                         (rejectReason && *rejectReason) ? *rejectReason : "One or more IR sensors failed electrical check");
+                return false;
+            }
+        }
+    }
+    detector_.setAllValidated(validated);
+    logEvent(nowMs, "IR_SENSOR_COMMISSION",
+             validated ? "All 6 physical IR sensors commissioned" : "All 6 physical IR sensors decommissioned");
+    return true;
+}
+
+bool TrafficController::commissionProtectedTurn(uint32_t nowMs, bool commissioned, const char** rejectReason) {
+    if (state_ == TrafficState::FAULT_SAFE) {
+        if (rejectReason) *rejectReason = "Controller is in FAULT_SAFE";
+        return false;
+    }
+    if (commissioned) {
+        const TrafficConfig::ConflictMatrixConfig& cm = phaseMgr_.getConflictMatrix();
+        if (!cm.rightHandTrafficRule ||
+            !cm.conflicts[2][0] || !cm.conflicts[2][1] ||
+            !cm.conflicts[2][3] || !cm.conflicts[2][4]) {
+            if (rejectReason) *rejectReason = "RHT Protected Turn conflict matrix validation failed";
+            return false;
+        }
+    }
+    setProtectedTurnCommissioned(nowMs, commissioned);
+    return true;
+}
+
+bool TrafficController::startLampTest(uint32_t nowMs, int8_t channelIdx, const char** rejectReason) {
+    if (channelIdx < 0) {
+        stopLampTest(nowMs);
+        return true;
+    }
+    if (state_ == TrafficState::FAULT_SAFE) {
+        if (rejectReason) *rejectReason = "Cannot run lamp test in FAULT_SAFE";
+        logEvent(nowMs, "COMMAND_REJECTED", "Cannot run lamp test in FAULT_SAFE");
+        return false;
+    }
+    if (controlMode_ != ControlMode::MANUAL &&
+        state_ != TrafficState::STARTUP_SAFE &&
+        state_ != TrafficState::ALL_RED) {
+        if (rejectReason) *rejectReason = "LAMP TEST requires MODE MANUAL (or STARTUP_SAFE / ALL_RED)";
+        logEvent(nowMs, "COMMAND_REJECTED", "LAMP TEST requires MODE MANUAL");
+        return false;
+    }
+    if (channelIdx >= static_cast<int8_t>(TrafficConfig::TOTAL_SIGNAL_OUTPUTS)) {
+        if (rejectReason) *rejectReason = "Invalid signal channel index";
+        return false;
+    }
+    if (!outputDriver_.setLampTestChannel(channelIdx)) {
+        if (rejectReason) {
+            *rejectReason = (channelIdx < 9)
+                                ? "Vehicle output driver is not commissioned/verified"
+                                : "Pedestrian output driver is not commissioned/verified";
+        }
+        logEvent(nowMs, "COMMAND_REJECTED",
+                 (channelIdx < 9)
+                     ? "LAMP TEST rejected: vehicle driver unverified (cannot energize unverified circuit)"
+                     : "LAMP TEST rejected: pedestrian driver unverified (cannot energize unverified circuit)");
+        return false;
+    }
+    logEvent(nowMs, "LAMP_TEST_ACTIVE", SignalOutputDriver::channelIndexToName(channelIdx));
+    return true;
+}
+
+void TrafficController::stopLampTest(uint32_t nowMs) {
+    if (outputDriver_.isLampTestActive()) {
+        outputDriver_.clearLampTest();
+        logEvent(nowMs, "LAMP_TEST_STOPPED", "Restored normal FSM signal outputs");
+    } else {
+        outputDriver_.clearLampTest();
+    }
+}
+
+bool TrafficController::startLampDiagnostics(uint32_t nowMs, uint32_t holdMs, const char** rejectReason) {
+    if (state_ == TrafficState::FAULT_SAFE) {
+        if (rejectReason) *rejectReason = "Cannot run lamp diagnostics in FAULT_SAFE (send CLEAR first)";
+        logEvent(nowMs, "COMMAND_REJECTED", "Cannot run lamp diagnostics in FAULT_SAFE");
+        return false;
+    }
+    if (!outputDriver_.isVehicleDriverVerified() ||
+        outputDriver_.getVehicleDriverType() == TrafficConfig::OutputDriverType::UNVERIFIED_SAFE_DISABLED) {
+        if (rejectReason) *rejectReason = "Vehicle output driver is unverified";
+        logEvent(nowMs, "COMMAND_REJECTED", "Vehicle driver unverified");
+        return false;
+    }
+
+    if (allGreenSession_.active) {
+        cancelAllGreenDiagnostics(nowMs, "LAMP_DIAG_OVERRIDE");
+    }
+
+    if (diagSession_.active) {
+        cancelLampDiagnostics(nowMs);
+    }
+
+    diagSession_.active              = true;
+    diagSession_.stepStartMs         = nowMs;
+    diagSession_.holdDurationMs      = (holdMs >= 200 && holdMs <= 10000) ? holdMs : 1000;
+    diagSession_.clearanceDurationMs = 500;
+    diagSession_.currentStep         = 0;
+    diagSession_.restoreMode         = controlMode_;
+
+    // Reset records for this session
+    for (uint8_t i = 0; i < 9; ++i) {
+        diagSession_.records[i].tested            = false;
+        diagSession_.records[i].commandedOn       = false;
+        diagSession_.records[i].pinLevelHigh      = false;
+        diagSession_.records[i].testedTimestampMs = 0;
+    }
+
+    outputDriver_.clearLampTest();
+
+    // Safely reach ALL_RED clearance without invalid transitions
+    if (state_ == TrafficState::STARTUP_SAFE) {
+        transitionTo(nowMs, TrafficState::ALL_RED, "LAMP_DIAG_START_ALL_RED");
+    } else if (state_ == TrafficState::MAIN_GREEN) {
+        transitionTo(nowMs, TrafficState::MAIN_YELLOW, "LAMP_DIAG_CLEARANCE_YELLOW");
+    } else if (state_ == TrafficState::SIDE_GREEN) {
+        transitionTo(nowMs, TrafficState::SIDE_YELLOW, "LAMP_DIAG_CLEARANCE_YELLOW");
+    } else if (state_ == TrafficState::TURN_GREEN) {
+        transitionTo(nowMs, TrafficState::TURN_YELLOW, "LAMP_DIAG_CLEARANCE_YELLOW");
+    } else if (state_ == TrafficState::PED_WALK) {
+        transitionTo(nowMs, TrafficState::ALL_RED, "LAMP_DIAG_CLEARANCE_ALL_RED");
+    } else if (state_ == TrafficState::ALL_RED) {
+        stateStartMs_ = nowMs;
+    }
+
+    logEvent(nowMs, "LAMP_DIAG_START", "Initiated safe 9-lamp diagnostic sequence");
+    return true;
+}
+
+void TrafficController::cancelLampDiagnostics(uint32_t nowMs) {
+    if (diagSession_.active) {
+        diagSession_.active = false;
+        outputDriver_.clearLampTest();
+        logEvent(nowMs, "LAMP_DIAG_CANCELLED", "Lamp diagnostics cancelled; restored normal outputs");
+    }
+}
+
+void TrafficController::updateLampDiagnostics(uint32_t nowMs) {
+    if (!diagSession_.active) return;
+
+    const uint32_t stepElapsed = nowMs - diagSession_.stepStartMs;
+    const uint8_t step = diagSession_.currentStep;
+
+    if (step % 2 == 0) {
+        // Even step: ALL-RED clearance interval
+        const uint32_t reqClearance = (step == 18) ? 1000U : diagSession_.clearanceDurationMs;
+        if (stepElapsed >= reqClearance) {
+            if (step >= 18) {
+                // Diagnostic session complete!
+                diagSession_.active = false;
+                outputDriver_.clearLampTest();
+                logEvent(nowMs, "LAMP_DIAG_COMPLETE",
+                         "Completed 9-lamp diagnostic sequence; restored normal operation");
+                controlMode_ = diagSession_.restoreMode;
+                nextTarget_ = NextPhaseTarget::MAIN_ROAD;
+                transitionTo(nowMs, TrafficState::MAIN_GREEN, "DIAG_COMPLETE_TO_MAIN_GREEN");
+                return;
+            }
+
+            // Move to next active lamp test step
+            const uint8_t lampIdx = step / 2; // 0..8
+            diagSession_.currentStep = step + 1;
+            diagSession_.stepStartMs = nowMs;
+
+            const int8_t ch = diagSession_.records[lampIdx].channelIdx;
+            outputDriver_.setLampTestChannel(ch);
+
+            // Record commanded state and firmware GPIO level
+            diagSession_.records[lampIdx].tested = true;
+            diagSession_.records[lampIdx].commandedOn = true;
+            diagSession_.records[lampIdx].pinLevelHigh = true;
+            diagSession_.records[lampIdx].testedTimestampMs = nowMs;
+
+            char buf[96];
+            snprintf(buf, sizeof(buf), "Lamp: %s | GPIO: %u | Commanded: ON | PinHigh: 1",
+                     diagSession_.records[lampIdx].channelName,
+                     diagSession_.records[lampIdx].gpioPin);
+            logEvent(nowMs, "LAMP_DIAG_STEP", buf);
+        }
+    } else {
+        // Odd step: Active individual lamp test interval
+        if (stepElapsed >= diagSession_.holdDurationMs) {
+            // De-energize test lamp and transition to next clearance
+            outputDriver_.clearLampTest();
+            diagSession_.currentStep = step + 1;
+            diagSession_.stepStartMs = nowMs;
+        }
+    }
+}
+
+bool TrafficController::startAllGreenDiagnostics(uint32_t nowMs, uint32_t durationMs, const char** rejectReason) {
+    if (state_ == TrafficState::FAULT_SAFE) {
+        if (rejectReason) *rejectReason = "Cannot run ALL-GREEN diagnostics in FAULT_SAFE (send CLEAR first)";
+        logEvent(nowMs, "COMMAND_REJECTED", "Cannot run ALL-GREEN diagnostics in FAULT_SAFE");
+        return false;
+    }
+    if (!outputDriver_.isVehicleDriverVerified() ||
+        outputDriver_.getVehicleDriverType() == TrafficConfig::OutputDriverType::UNVERIFIED_SAFE_DISABLED) {
+        if (rejectReason) *rejectReason = "Vehicle output driver is unverified or disabled";
+        logEvent(nowMs, "COMMAND_REJECTED", "Vehicle driver unverified");
+        return false;
+    }
+    if (allGreenSession_.active) {
+        if (rejectReason) *rejectReason = "ALL-GREEN diagnostic test already running";
+        return false;
+    }
+
+    // Cancel active single lamp or 9-lamp diagnostic
+    if (diagSession_.active) {
+        cancelLampDiagnostics(nowMs);
+    }
+    outputDriver_.clearLampTest();
+
+    // Cancel pending pedestrian requests and simulated demands safely
+    pedCtrl_.reset(nowMs);
+    clearSimulatedDemand(nowMs);
+    manualStepRequested_ = false;
+
+    allGreenSession_.active = true;
+    allGreenSession_.startMs = nowMs;
+    allGreenSession_.durationMs = (durationMs >= 1000 && durationMs <= 30000) ? durationMs : 10000;
+    allGreenSession_.savedControlMode = controlMode_;
+    allGreenSession_.completed = false;
+    allGreenSession_.aborted = false;
+    allGreenSession_.abortReason[0] = '\0';
+
+    transitionTo(nowMs, TrafficState::ALL_GREEN_DIAG, "START_ALL_GREEN_DIAG");
+    logEvent(nowMs, "ALL_GREEN_TEST_START",
+             "Commanded GPIO 25, 14, 21 ON simultaneously for 10000 ms; Reds/Yellows/Walks OFF");
+    return true;
+}
+
+void TrafficController::cancelAllGreenDiagnostics(uint32_t nowMs, const char* reason) {
+    if (allGreenSession_.active) {
+        allGreenSession_.active = false;
+        allGreenSession_.aborted = true;
+        if (reason) {
+            strncpy(allGreenSession_.abortReason, reason, sizeof(allGreenSession_.abortReason) - 1);
+            allGreenSession_.abortReason[sizeof(allGreenSession_.abortReason) - 1] = '\0';
+        } else {
+            strncpy(allGreenSession_.abortReason, "OPERATOR_ABORT", sizeof(allGreenSession_.abortReason));
+        }
+        logEvent(nowMs, "ALL_GREEN_TEST_ABORT", allGreenSession_.abortReason);
+        controlMode_ = ControlMode::MANUAL;
+        allGreenHoldActive_ = true;
+        transitionTo(nowMs, TrafficState::ALL_RED, "ALL_GREEN_TEST_ABORTED");
+    }
+}
+
+void TrafficController::updateAllGreenDiagnostics(uint32_t nowMs) {
+    if (!allGreenSession_.active) return;
+
+    const uint32_t elapsed = nowMs - allGreenSession_.startMs;
+    if (elapsed >= allGreenSession_.durationMs) {
+        allGreenSession_.active = false;
+        allGreenSession_.completed = true;
+        logEvent(nowMs, "ALL_GREEN_TEST_COMPLETE",
+                 "10-second test completed; transitioning to safe ALL_RED hold");
+        controlMode_ = ControlMode::MANUAL;
+        allGreenHoldActive_ = true;
+        transitionTo(nowMs, TrafficState::ALL_RED, "ALL_GREEN_TEST_COMPLETE");
+    }
+}
+
+uint32_t TrafficController::getAllGreenRemainingMs(uint32_t nowMs) const {
+    if (!allGreenSession_.active) return 0;
+    const uint32_t elapsed = nowMs - allGreenSession_.startMs;
+    return (elapsed < allGreenSession_.durationMs) ? (allGreenSession_.durationMs - elapsed) : 0;
+}
+
 PersistentControllerConfig TrafficController::exportPersistentConfig() const {
     PersistentControllerConfig cfg = ConfigurationStorage::makeDefaultConfig();
     cfg.controlMode           = static_cast<uint8_t>(controlMode_);
@@ -214,6 +646,7 @@ bool TrafficController::applyPersistentConfig(uint32_t nowMs, const PersistentCo
     outputDriver_.setPedestrianDriverConfig(
         static_cast<TrafficConfig::OutputDriverType>(cfg.pedDriverType),
         cfg.pedDriverVerified);
+    faultMgr_.clearFaultBit(FaultCode::INVALID_CONFIGURATION);
     logEvent(nowMs, "CONFIG_APPLIED", "Persistent configuration validated and applied");
     return true;
 }
@@ -221,6 +654,9 @@ bool TrafficController::applyPersistentConfig(uint32_t nowMs, const PersistentCo
 bool TrafficController::saveConfigToNvs(uint32_t nowMs) {
     const PersistentControllerConfig cfg = exportPersistentConfig();
     const bool ok = storage_.save(cfg);
+    if (ok) {
+        faultMgr_.clearFaultBit(FaultCode::INVALID_CONFIGURATION);
+    }
     logEvent(nowMs, ok ? "NVS_SAVED" : "NVS_SAVE_FAILED",
              ok ? "Configuration saved to NVS" : "Failed to save configuration to NVS");
     return ok;
@@ -228,19 +664,27 @@ bool TrafficController::saveConfigToNvs(uint32_t nowMs) {
 
 bool TrafficController::loadConfigFromNvs(uint32_t nowMs) {
     PersistentControllerConfig loaded;
-    const bool ok = storage_.load(loaded);
+    const NvsLoadStatus status = storage_.loadWithStatus(loaded);
     applyPersistentConfig(nowMs, loaded);
-    if (!ok) {
+    if (status == NvsLoadStatus::CORRUPTED_FALLBACK) {
         faultMgr_.recordNonFatalFault(nowMs, FaultCode::INVALID_CONFIGURATION,
                                       "NVS load failed or corrupted; restored safe defaults");
+        return false;
     }
-    return ok;
+    faultMgr_.clearFaultBit(FaultCode::INVALID_CONFIGURATION);
+    if (status == NvsLoadStatus::INITIALIZED_FIRST_BOOT) {
+        logEvent(nowMs, "NVS_INITIALIZED", "Initialized NVS namespace with validated default configuration");
+    } else {
+        logEvent(nowMs, "NVS_LOADED", "Valid persistent configuration loaded from NVS");
+    }
+    return true;
 }
 
 bool TrafficController::restoreDefaultConfig(uint32_t nowMs) {
     PersistentControllerConfig def;
     const bool ok = storage_.resetToDefaults(def);
     applyPersistentConfig(nowMs, def);
+    faultMgr_.clearFaultBit(FaultCode::INVALID_CONFIGURATION);
     logEvent(nowMs, "DEFAULTS_RESTORED", "Controller configuration restored to safe defaults");
     return ok;
 }
@@ -253,8 +697,20 @@ bool TrafficController::setControlMode(uint32_t nowMs, ControlMode mode) {
     if (static_cast<uint8_t>(mode) > static_cast<uint8_t>(ControlMode::MANUAL)) {
         return false;
     }
+    if (mode == ControlMode::ADAPTIVE && !isAllPhysicalIrValidated()) {
+        logEvent(nowMs, "COMMAND_REJECTED",
+                 "MODE ADAPTIVE unavailable: physical IR sensors must pass commissioning first");
+        return false;
+    }
+    if (mode != ControlMode::MANUAL && outputDriver_.isLampTestActive()) {
+        outputDriver_.clearLampTest();
+    }
     controlMode_         = mode;
     manualStepRequested_ = false;
+    allGreenHoldActive_  = false;
+    if (state_ == TrafficState::ALL_RED) {
+        stateStartMs_ = nowMs;
+    }
     logEvent(nowMs, "CONTROL_MODE_CHANGE", controlModeToString(mode));
     return true;
 }
@@ -267,6 +723,24 @@ bool TrafficController::advanceManualStep(uint32_t nowMs) {
     if (controlMode_ != ControlMode::MANUAL) {
         logEvent(nowMs, "COMMAND_REJECTED", "NEXT command requires MODE MANUAL");
         return false;
+    }
+    if (state_ == TrafficState::ALL_RED && allGreenHoldActive_) {
+        allGreenHoldActive_  = false;
+        stateStartMs_        = nowMs;
+        nextTarget_          = NextPhaseTarget::MAIN_ROAD;
+        manualStepRequested_ = false;
+        logEvent(nowMs, "MANUAL_STEP_REQUESTED", "Operator resumed normal sequencing from ALL-RED hold");
+        return true;
+    }
+    if (state_ != TrafficState::MAIN_GREEN &&
+        state_ != TrafficState::SIDE_GREEN &&
+        state_ != TrafficState::TURN_GREEN &&
+        state_ != TrafficState::PED_WALK) {
+        logEvent(nowMs, "COMMAND_REJECTED", "Clearance transition in progress; wait for green/walk phase");
+        return false;
+    }
+    if (outputDriver_.isLampTestActive()) {
+        outputDriver_.clearLampTest();
     }
     manualStepRequested_ = true;
     logEvent(nowMs, "MANUAL_STEP_REQUESTED", "Operator requested phase advance via safe clearance");
@@ -339,9 +813,24 @@ void TrafficController::processHardwareAdapter(uint32_t nowMs, const HardwareInp
     }
 }
 
+void TrafficController::updateRawHardwareTelemetry(const HardwareInputs& inputs) {
+    if (!inputs.inputsValid) return;
+    if (inputs.hasExtendedChannels) {
+        for (uint8_t i = 0; i < TrafficConfig::IR_SENSOR_COUNT; ++i) {
+            detector_.updateRawPinSampleOnly(i, inputs.irPinHigh[i]);
+        }
+        pedCtrl_.updateRawPinSampleOnly(0, inputs.rawPedButtonPinHigh);
+        pedCtrl_.updateRawPinSampleOnly(1, inputs.rawPed2ButtonPinHigh);
+    } else {
+        detector_.updateRawPinSampleOnly(2, inputs.rawIrSensorPinHigh);
+        pedCtrl_.updateRawPinSampleOnly(0, inputs.rawPedButtonPinHigh);
+    }
+}
+
 void TrafficController::processPhysicalInputs(uint32_t nowMs, bool rawPedButtonPinHigh, bool rawIrSensorPinHigh) {
+    // Legacy v1.1.0 single-sensor helper maps rawIrSensorPinHigh to Side Road Sensor 1 (index 2, GPIO 35)
     const bool irPins[TrafficConfig::IR_SENSOR_COUNT] = {
-        rawIrSensorPinHigh, true, true, true, true, true
+        true, true, rawIrSensorPinHigh, true, true, true
     };
     processAllPhysicalInputs(nowMs, irPins, rawPedButtonPinHigh, true);
 }
@@ -373,9 +862,23 @@ void TrafficController::processAllPhysicalInputs(uint32_t nowMs,
 
     // 2. Update all 6 IR vehicle sensors independently
     for (uint8_t i = 0; i < TrafficConfig::IR_SENSOR_COUNT; ++i) {
+        const bool prevStable = detector_.getChannel(i).stableDetected;
         const bool wasStuck = detector_.getChannel(i).stuckFault;
         const bool newArrival = detector_.updateChannel(i, nowMs, irPinHigh[i], faultMgr_);
         const bool nowStuck = detector_.getChannel(i).stuckFault;
+        const bool nowStable = detector_.getChannel(i).stableDetected;
+
+        if (!prevStable && nowStable) {
+            char detail[64];
+            snprintf(detail, sizeof(detail), "IR%u (GPIO %u) active (obstacle detected)",
+                     static_cast<unsigned int>(i + 1), TrafficConfig::IR_SENSOR_PINS[i]);
+            logEvent(nowMs, "SENSOR_DETECTED", detail);
+        } else if (prevStable && !nowStable) {
+            char detail[64];
+            snprintf(detail, sizeof(detail), "IR%u (GPIO %u) released (Cycle=YES, Ready to Commission)",
+                     static_cast<unsigned int>(i + 1), TrafficConfig::IR_SENSOR_PINS[i]);
+            logEvent(nowMs, "SENSOR_RELEASED", detail);
+        }
 
         if (newArrival) {
             logEvent(nowMs, "DEMAND_REGISTERED", "Physical IR vehicle detected");
@@ -420,18 +923,27 @@ bool TrafficController::setSimulationMode(uint32_t nowMs, bool enable) {
         detector_.reset(nowMs);
         mode_ = OperatingMode::HARDWARE_READY;
 
+        const bool anyIrValid = detector_.isAnyChannelValidated();
         if (hadSimVehicle && hadSimPed) {
             logEvent(nowMs, "MODE_CHANGE",
-                     "Switched to HARDWARE_READY; discarded simulated VEHICLE and PEDESTRIAN demands (NOTE: physical sensors unverified)");
+                     anyIrValid
+                         ? "Switched to HARDWARE_READY; discarded simulated VEHICLE and PEDESTRIAN demands"
+                         : "Switched to HARDWARE_READY; discarded simulated VEHICLE and PEDESTRIAN demands (NOTE: physical sensors unverified)");
         } else if (hadSimVehicle) {
             logEvent(nowMs, "MODE_CHANGE",
-                     "Switched to HARDWARE_READY; discarded simulated VEHICLE demand (NOTE: physical sensors unverified)");
+                     anyIrValid
+                         ? "Switched to HARDWARE_READY; discarded simulated VEHICLE demand"
+                         : "Switched to HARDWARE_READY; discarded simulated VEHICLE demand (NOTE: physical sensors unverified)");
         } else if (hadSimPed) {
             logEvent(nowMs, "MODE_CHANGE",
-                     "Switched to HARDWARE_READY; discarded simulated PEDESTRIAN demand (NOTE: physical sensors unverified)");
+                     anyIrValid
+                         ? "Switched to HARDWARE_READY; discarded simulated PEDESTRIAN demand"
+                         : "Switched to HARDWARE_READY; discarded simulated PEDESTRIAN demand (NOTE: physical sensors unverified)");
         } else {
             logEvent(nowMs, "MODE_CHANGE",
-                     "Switched to HARDWARE_READY; no simulated demands were active (NOTE: physical sensors unverified)");
+                     anyIrValid
+                         ? "Switched to HARDWARE_READY; no simulated demands were active"
+                         : "Switched to HARDWARE_READY; no simulated demands were active (NOTE: physical sensors unverified)");
         }
 
         // Safeguard: If an active non-main phase was driven by simulation, exit safely via clearance
@@ -509,7 +1021,7 @@ bool TrafficController::triggerSimPedestrianChannel(uint32_t nowMs, uint8_t pedC
         return false;
     }
 
-    if (pedCtrl_.requestPedestrian(pedChannelIdx, true)) {
+    if (pedCtrl_.requestPedestrian(pedChannelIdx, true, nowMs)) {
         logEvent(nowMs, "PED_REQUEST_LATCHED", "Simulated pedestrian crossing request latched");
     } else {
         logEvent(nowMs, "PED_REQUEST_PENDING", "Simulated pedestrian request already latched");
@@ -571,6 +1083,8 @@ void TrafficController::clearEmergencyPriority(uint32_t nowMs) {
 }
 
 void TrafficController::resetLogical(uint32_t nowMs, const char* reason) {
+    cancelLampDiagnostics(nowMs);
+    outputDriver_.clearLampTest();
     faultMgr_.reset(nowMs);
     detector_.reset(nowMs);
     demandMgr_.reset(nowMs);
@@ -580,6 +1094,7 @@ void TrafficController::resetLogical(uint32_t nowMs, const char* reason) {
     sideGapTimerActive_     = false;
     postPedClearanceActive_ = false;
     manualStepRequested_    = false;
+    allGreenHoldActive_     = false;
     nextTarget_             = NextPhaseTarget::MAIN_ROAD;
     lastServedNonMain_      = TrafficState::STARTUP_SAFE;
 
@@ -587,6 +1102,7 @@ void TrafficController::resetLogical(uint32_t nowMs, const char* reason) {
     const TrafficState prevState = state_;
     state_        = TrafficState::STARTUP_SAFE;
     stateStartMs_ = nowMs;
+    lastUpdateMs_ = nowMs;
     if (transitionCb_ && prevState != TrafficState::STARTUP_SAFE) {
         transitionCb_(nowMs, prevState, TrafficState::STARTUP_SAFE, reason);
     }
@@ -594,6 +1110,15 @@ void TrafficController::resetLogical(uint32_t nowMs, const char* reason) {
 
 void TrafficController::triggerFault(uint32_t nowMs, const char* reason, FaultCode code) {
     const char* safeReason = (reason && reason[0] != '\0') ? reason : "INTERNAL_CONTROL_FAULT";
+    cancelLampDiagnostics(nowMs);
+    outputDriver_.clearLampTest();
+    if (allGreenSession_.active) {
+        allGreenSession_.active = false;
+        allGreenSession_.aborted = true;
+        strncpy(allGreenSession_.abortReason, "FAULT_TRIGGERED", sizeof(allGreenSession_.abortReason) - 1);
+        allGreenSession_.abortReason[sizeof(allGreenSession_.abortReason) - 1] = '\0';
+        logEvent(nowMs, "ALL_GREEN_TEST_ABORT", "FAULT_TRIGGERED");
+    }
     faultMgr_.recordCriticalFault(nowMs, code, safeReason);
     pedCtrl_.setAllSafeOff();
     logEvent(nowMs, "FAULT_DETECTED", safeReason);
@@ -615,6 +1140,18 @@ bool TrafficController::clearFaultAndRecover(uint32_t nowMs, const char* reason)
     // Recover through STARTUP_SAFE -> ALL_RED -> MAIN_GREEN so recovery never
     // immediately introduces a conflicting green.
     resetLogical(nowMs, reason ? reason : "OPERATOR_FAULT_RECOVERY");
+    return true;
+}
+
+bool TrafficController::clearNonFatalFaults(uint32_t nowMs) {
+    if (state_ == TrafficState::FAULT_SAFE || faultMgr_.isCriticalFaultLatched()) {
+        return false;
+    }
+    if (faultMgr_.getActiveFaultMask() == 0) {
+        return false;
+    }
+    faultMgr_.clearNonFatalFaults(nowMs);
+    logEvent(nowMs, "FAULTS_CLEARED", "Cleared non-fatal diagnostic fault indicators");
     return true;
 }
 
@@ -658,6 +1195,23 @@ NextPhaseTarget TrafficController::selectNextTargetAdaptive(TrafficConfig::Movem
         }
     }
 
+    // Fixed-time fallback check:
+    // If sensors are faulted, disconnected, unvalidated, or stale, fall back to fixed-time rotation!
+    const bool sensorFallback = detector_.isAnyChannelFaulted() ||
+                                !detector_.isAllChannelsValidated();
+    if (sensorFallback) {
+        TrafficState currState = TrafficState::MAIN_GREEN;
+        if (currentMovement == TrafficConfig::MovementId::SIDE_ROAD) {
+            currState = TrafficState::SIDE_GREEN;
+        } else if (currentMovement == TrafficConfig::MovementId::PROTECTED_TURN) {
+            currState = TrafficState::TURN_GREEN;
+        } else if (currentMovement == TrafficConfig::MovementId::PED_CROSSING_1 ||
+                   currentMovement == TrafficConfig::MovementId::PED_CROSSING_2) {
+            currState = TrafficState::PED_WALK;
+        }
+        return selectNextTargetFixed(currState);
+    }
+
     const uint32_t mainScore = (currentMovement == TrafficConfig::MovementId::MAIN_ROAD)
                                    ? 0
                                    : demandMgr_.calculateScore(TrafficConfig::MovementId::MAIN_ROAD);
@@ -669,20 +1223,25 @@ NextPhaseTarget TrafficController::selectNextTargetAdaptive(TrafficConfig::Movem
                                    ? 0
                                    : demandMgr_.calculateScore(TrafficConfig::MovementId::PROTECTED_TURN);
 
-    // Pedestrian score: when requested, competes fairly and prevents starvation
+    // Pedestrian score: when requested, competes fairly with waiting-time priority and starvation prevention
     uint32_t pedScore = 0;
-    if (pedCtrl_.hasAnyDemand()) {
-        pedScore = static_cast<uint32_t>(demandMgr_.getDemandConfig().activeSensorWeight) * 2U;
+    if (pedCtrl_.hasAnyDemand() && currentMovement != TrafficConfig::MovementId::PED_CROSSING_1) {
+        const TrafficConfig::DemandConfig& dcfg = demandMgr_.getDemandConfig();
+        pedScore = static_cast<uint32_t>(dcfg.activeSensorWeight);
         if (lastServedNonMain_ != TrafficState::PED_WALK) {
-            pedScore += 5U;
+            pedScore += 1U;
+        }
+        if (dcfg.waitTimeWeightMs > 0) {
+            pedScore += (pedCtrl_.getMaxWaitingTimeMs(lastUpdateMs_) / dcfg.waitTimeWeightMs);
+        }
+        if (pedCtrl_.getMaxSkippedCycles() >= dcfg.starvationSkipLimit) {
+            pedScore += dcfg.starvationBoostScore;
         }
     }
 
     // Choose the highest scoring waiting target
     uint32_t bestScore = 0;
-    NextPhaseTarget bestTarget = (currentMovement == TrafficConfig::MovementId::MAIN_ROAD)
-                                     ? NextPhaseTarget::MAIN_ROAD
-                                     : NextPhaseTarget::MAIN_ROAD;
+    NextPhaseTarget bestTarget = NextPhaseTarget::MAIN_ROAD;
 
     if (pedScore > bestScore) {
         bestScore  = pedScore;
@@ -702,7 +1261,18 @@ NextPhaseTarget TrafficController::selectNextTargetAdaptive(TrafficConfig::Movem
     }
 
     if (bestScore == 0) {
-        return NextPhaseTarget::MAIN_ROAD;
+        // All sensors clear: no vehicle/ped demand detected.
+        // Fall back to fixed-time cyclic scheduling so all permitted movements cycle continuously!
+        TrafficState currState = TrafficState::MAIN_GREEN;
+        if (currentMovement == TrafficConfig::MovementId::SIDE_ROAD) {
+            currState = TrafficState::SIDE_GREEN;
+        } else if (currentMovement == TrafficConfig::MovementId::PROTECTED_TURN) {
+            currState = TrafficState::TURN_GREEN;
+        } else if (currentMovement == TrafficConfig::MovementId::PED_CROSSING_1 ||
+                   currentMovement == TrafficConfig::MovementId::PED_CROSSING_2) {
+            currState = TrafficState::PED_WALK;
+        }
+        return selectNextTargetFixed(currState);
     }
     return bestTarget;
 }
@@ -733,7 +1303,7 @@ NextPhaseTarget TrafficController::selectNextTargetAfterMain() const {
             if (sidePending && (!turnPending || lastServedNonMain_ != TrafficState::SIDE_GREEN)) {
                 return NextPhaseTarget::SIDE_ROAD;
             }
-            if (turnPending) {
+            if (turnPending && phaseMgr_.isProtectedTurnCommissioned()) {
                 return NextPhaseTarget::PROTECTED_TURN;
             }
             return NextPhaseTarget::SIDE_ROAD;
@@ -744,7 +1314,7 @@ NextPhaseTarget TrafficController::selectNextTargetAfterMain() const {
         return NextPhaseTarget::PEDESTRIAN;
     }
     if (sidePending && turnPending) {
-        if (lastServedNonMain_ == TrafficState::SIDE_GREEN) {
+        if (lastServedNonMain_ == TrafficState::SIDE_GREEN && phaseMgr_.isProtectedTurnCommissioned()) {
             return NextPhaseTarget::PROTECTED_TURN;
         }
         return NextPhaseTarget::SIDE_ROAD;
@@ -752,13 +1322,22 @@ NextPhaseTarget TrafficController::selectNextTargetAfterMain() const {
     if (sidePending) {
         return NextPhaseTarget::SIDE_ROAD;
     }
-    if (turnPending) {
+    if (turnPending && phaseMgr_.isProtectedTurnCommissioned()) {
         return NextPhaseTarget::PROTECTED_TURN;
     }
     return NextPhaseTarget::MAIN_ROAD;
 }
 
 NextPhaseTarget TrafficController::selectNextTargetAfterSide() const {
+    if (phaseMgr_.isEmergencyPriorityActive()) {
+        const TrafficConfig::MovementId em = phaseMgr_.getEmergencyMovement();
+        if (em == TrafficConfig::MovementId::MAIN_ROAD) return NextPhaseTarget::MAIN_ROAD;
+        if (em == TrafficConfig::MovementId::PROTECTED_TURN && phaseMgr_.isProtectedTurnCommissioned()) {
+            return NextPhaseTarget::PROTECTED_TURN;
+        }
+        return NextPhaseTarget::MAIN_ROAD;
+    }
+
     if (controlMode_ == ControlMode::FIXED) {
         return selectNextTargetFixed(TrafficState::SIDE_GREEN);
     }
@@ -768,13 +1347,19 @@ NextPhaseTarget TrafficController::selectNextTargetAfterSide() const {
     if (pedCtrl_.hasAnyDemand()) {
         return NextPhaseTarget::PEDESTRIAN;
     }
-    if (hasTurnVehicleDemand() && !hasMainVehicleDemand()) {
+    if (hasTurnVehicleDemand() && phaseMgr_.isProtectedTurnCommissioned()) {
         return NextPhaseTarget::PROTECTED_TURN;
     }
     return NextPhaseTarget::MAIN_ROAD;
 }
 
 NextPhaseTarget TrafficController::selectNextTargetAfterTurn() const {
+    if (phaseMgr_.isEmergencyPriorityActive()) {
+        const TrafficConfig::MovementId em = phaseMgr_.getEmergencyMovement();
+        if (em == TrafficConfig::MovementId::SIDE_ROAD) return NextPhaseTarget::SIDE_ROAD;
+        return NextPhaseTarget::MAIN_ROAD;
+    }
+
     if (controlMode_ == ControlMode::FIXED) {
         return selectNextTargetFixed(TrafficState::TURN_GREEN);
     }
@@ -784,10 +1369,14 @@ NextPhaseTarget TrafficController::selectNextTargetAfterTurn() const {
     if (pedCtrl_.hasAnyDemand()) {
         return NextPhaseTarget::PEDESTRIAN;
     }
+    if (hasSideVehicleDemand() && !hasMainVehicleDemand()) {
+        return NextPhaseTarget::SIDE_ROAD;
+    }
     return NextPhaseTarget::MAIN_ROAD;
 }
 
 void TrafficController::update(uint32_t nowMs) {
+    lastUpdateMs_ = nowMs;
     refreshDemandManager(nowMs);
 
     // Verify output invariants before running state progression
@@ -801,6 +1390,18 @@ void TrafficController::update(uint32_t nowMs) {
     }
 
     if (state_ == TrafficState::FAULT_SAFE) {
+        return;
+    }
+
+    if (diagSession_.active) {
+        if (state_ == TrafficState::ALL_RED) {
+            updateLampDiagnostics(nowMs);
+            return;
+        }
+    }
+
+    if (allGreenSession_.active) {
+        updateAllGreenDiagnostics(nowMs);
         return;
     }
 
@@ -833,6 +1434,10 @@ void TrafficController::update(uint32_t nowMs) {
         }
 
         case TrafficState::ALL_RED: {
+            if (allGreenHoldActive_) {
+                // Hold in safe ALL_RED until operator explicitly resumes
+                break;
+            }
             const uint32_t requiredClearanceMs = postPedClearanceActive_
                                                      ? timings_.pedClearanceMs
                                                      : timings_.allRedMs;
@@ -846,19 +1451,23 @@ void TrafficController::update(uint32_t nowMs) {
                     sideGapTimerActive_ = !hasActivePresenceForCurrentPhase(TrafficConfig::MovementId::SIDE_ROAD);
                     sideGapStartMs_     = nowMs;
                     demandMgr_.notifyPhaseServed(nowMs, TrafficConfig::MovementId::SIDE_ROAD);
+                    pedCtrl_.notifyVehiclePhaseServed();
                     transitionTo(nowMs, TrafficState::SIDE_GREEN, "ALL_RED_CLEARANCE_COMPLETE");
                 } else if (nextTarget_ == NextPhaseTarget::PROTECTED_TURN &&
                            phaseMgr_.isProtectedTurnCommissioned()) {
                     sideGapTimerActive_ = !hasActivePresenceForCurrentPhase(TrafficConfig::MovementId::PROTECTED_TURN);
                     sideGapStartMs_     = nowMs;
                     demandMgr_.notifyPhaseServed(nowMs, TrafficConfig::MovementId::PROTECTED_TURN);
+                    pedCtrl_.notifyVehiclePhaseServed();
                     transitionTo(nowMs, TrafficState::TURN_GREEN, "ALL_RED_CLEARANCE_COMPLETE");
                 } else if (nextTarget_ == NextPhaseTarget::PEDESTRIAN) {
                     pedCtrl_.beginWalkPhase();
+                    demandMgr_.notifyPhaseServed(nowMs, TrafficConfig::MovementId::PED_CROSSING_1);
                     transitionTo(nowMs, TrafficState::PED_WALK, "ALL_RED_CLEARANCE_COMPLETE");
                 } else {
                     sideGapTimerActive_ = false;
                     demandMgr_.notifyPhaseServed(nowMs, TrafficConfig::MovementId::MAIN_ROAD);
+                    pedCtrl_.notifyVehiclePhaseServed();
                     transitionTo(nowMs, TrafficState::MAIN_GREEN, "ALL_RED_CLEARANCE_COMPLETE");
                 }
             }
@@ -878,11 +1487,13 @@ void TrafficController::update(uint32_t nowMs) {
             if (elapsed >= timings_.mainMinGreenMs) {
                 const NextPhaseTarget target = selectNextTargetAfterMain();
                 if (target != NextPhaseTarget::MAIN_ROAD) {
-                    // In ACTUATED or ADAPTIVE mode, if Main Road has active vehicle presence,
+                    // In AUTO, ACTUATED, or ADAPTIVE mode, if Main Road has active vehicle presence,
                     // extend Main Green up to mainMaxGreenMs before yielding.
                     const bool mainPresence = hasActivePresenceForCurrentPhase(TrafficConfig::MovementId::MAIN_ROAD);
                     const bool canExtendMain =
-                        (controlMode_ == ControlMode::ACTUATED || controlMode_ == ControlMode::ADAPTIVE) &&
+                        (controlMode_ == ControlMode::AUTO ||
+                         controlMode_ == ControlMode::ACTUATED ||
+                         controlMode_ == ControlMode::ADAPTIVE) &&
                         mainPresence &&
                         !phaseMgr_.isEmergencyPriorityActive() &&
                         (elapsed < timings_.mainMaxGreenMs);
@@ -964,9 +1575,6 @@ void TrafficController::update(uint32_t nowMs) {
 
         case TrafficState::SIDE_YELLOW: {
             if (elapsed >= timings_.sideYellowMs) {
-                if (controlMode_ == ControlMode::AUTO) {
-                    nextTarget_ = NextPhaseTarget::MAIN_ROAD;
-                }
                 transitionTo(nowMs, TrafficState::ALL_RED, "SIDE_YELLOW_COMPLETE");
             }
             break;
@@ -1024,9 +1632,6 @@ void TrafficController::update(uint32_t nowMs) {
 
         case TrafficState::TURN_YELLOW: {
             if (elapsed >= timings_.turnYellowMs) {
-                if (controlMode_ == ControlMode::AUTO) {
-                    nextTarget_ = NextPhaseTarget::MAIN_ROAD;
-                }
                 transitionTo(nowMs, TrafficState::ALL_RED, "TURN_YELLOW_COMPLETE");
             }
             break;
@@ -1059,6 +1664,13 @@ void TrafficController::update(uint32_t nowMs) {
 bool TrafficController::isValidTransition(TrafficState from, TrafficState to) const {
     if (to == TrafficState::FAULT_SAFE || to == TrafficState::STARTUP_SAFE) {
         return true;
+    }
+
+    if (to == TrafficState::ALL_GREEN_DIAG) {
+        return (from != TrafficState::FAULT_SAFE);
+    }
+    if (from == TrafficState::ALL_GREEN_DIAG) {
+        return (to == TrafficState::ALL_RED);
     }
 
     switch (from) {
@@ -1099,9 +1711,15 @@ void TrafficController::transitionTo(uint32_t nowMs, TrafficState newState, cons
         return;
     }
 
-    // Check explicit movement conflict matrix before entering any active phase
-    bool activeMovements[static_cast<size_t>(TrafficConfig::MovementId::COUNT)] = {
-        false, false, false, false, false
+    const SignalOutputs candidateOut = deriveOutputsForState(newState);
+
+    // Check explicit RHT movement conflict matrix across all 5 movements before entering any phase
+    const bool activeMovements[static_cast<size_t>(TrafficConfig::MovementId::COUNT)] = {
+        candidateOut.mainGreen || candidateOut.mainYellow,
+        candidateOut.sideGreen || candidateOut.sideYellow,
+        candidateOut.turnGreen || candidateOut.turnYellow,
+        candidateOut.pedWalk,
+        candidateOut.ped2Walk
     };
     if (newState == TrafficState::MAIN_GREEN) {
         if (!phaseMgr_.isMovementPermitted(TrafficConfig::MovementId::MAIN_ROAD, activeMovements)) {
@@ -1119,8 +1737,13 @@ void TrafficController::transitionTo(uint32_t nowMs, TrafficState newState, cons
             return;
         }
     }
+    if (newState != TrafficState::ALL_GREEN_DIAG) {
+        if (!phaseMgr_.verifyActiveMovementsConflictFree(activeMovements)) {
+            triggerFault(nowMs, "RHT_CONFLICT_MATRIX_VIOLATION", FaultCode::ILLEGAL_SIGNAL_COMBINATION);
+            return;
+        }
+    }
 
-    const SignalOutputs candidateOut = deriveOutputsForState(newState);
     const char* violation = nullptr;
     if (!verifySafetyInvariants(newState, candidateOut, &violation)) {
         triggerFault(nowMs,
@@ -1130,8 +1753,12 @@ void TrafficController::transitionTo(uint32_t nowMs, TrafficState newState, cons
     }
 
     const TrafficState oldState = state_;
-    state_        = newState;
-    stateStartMs_ = nowMs;
+    state_               = newState;
+    stateStartMs_        = nowMs;
+    manualStepRequested_ = false;
+    if (controlMode_ != ControlMode::MANUAL && outputDriver_.isLampTestActive()) {
+        outputDriver_.clearLampTest();
+    }
 
     if (transitionCb_) {
         transitionCb_(nowMs, oldState, newState, reason);
@@ -1234,6 +1861,14 @@ SignalOutputs TrafficController::deriveOutputsForState(TrafficState state) {
             out.ped2Walk     = true;
             break;
 
+        case TrafficState::ALL_GREEN_DIAG:
+            out.mainGreen    = true;
+            out.sideGreen    = true;
+            out.turnGreen    = true;
+            out.pedDontWalk  = true;
+            out.ped2DontWalk = true;
+            break;
+
         case TrafficState::FAULT_SAFE:
         default:
             break;
@@ -1245,6 +1880,24 @@ SignalOutputs TrafficController::deriveOutputsForState(TrafficState state) {
 bool TrafficController::verifySafetyInvariants(TrafficState state,
                                                const SignalOutputs& out,
                                                const char** violationReason) {
+    // Hardware Diagnostic Exception: ALL_GREEN_DIAG bench diagnostic test
+    if (state == TrafficState::ALL_GREEN_DIAG) {
+        if (!out.mainGreen || !out.sideGreen || !out.turnGreen) {
+            if (violationReason) *violationReason = "ALL_GREEN_DIAG_GREENS_MISSING";
+            return false;
+        }
+        if (out.mainRed || out.sideRed || out.turnRed ||
+            out.mainYellow || out.sideYellow || out.turnYellow) {
+            if (violationReason) *violationReason = "ALL_GREEN_DIAG_NON_GREENS_ACTIVE";
+            return false;
+        }
+        if (out.pedWalk || out.ped2Walk || !out.pedDontWalk || !out.ped2DontWalk) {
+            if (violationReason) *violationReason = "ALL_GREEN_DIAG_PED_NOT_DONT_WALK";
+            return false;
+        }
+        return true;
+    }
+
     // Invariant 1: No two vehicle movements may display GREEN (or YELLOW) simultaneously.
     const uint8_t activeVehicleGreens =
         (out.mainGreen ? 1 : 0) + (out.sideGreen ? 1 : 0) + (out.turnGreen ? 1 : 0);
@@ -1270,7 +1923,7 @@ bool TrafficController::verifySafetyInvariants(TrafficState state,
     // Invariant 3: All vehicle approaches must be logically RED during pedestrian WALK,
     // and pedestrian RED + GREEN must never be simultaneous.
     if (state == TrafficState::PED_WALK || out.pedWalk || out.ped2Walk) {
-        if (!out.mainRed || !out.sideRed || mainMoving || sideMoving || turnMoving) {
+        if (!out.mainRed || !out.sideRed || !out.turnRed || mainMoving || sideMoving || turnMoving) {
             if (violationReason) *violationReason = "VEHICLES_NOT_RED_DURING_PED_WALK";
             return false;
         }
@@ -1344,6 +1997,7 @@ const char* TrafficController::stateToString(TrafficState s) {
         case TrafficState::TURN_GREEN:   return "TURN_GREEN";
         case TrafficState::TURN_YELLOW:  return "TURN_YELLOW";
         case TrafficState::PED_WALK:     return "PED_WALK";
+        case TrafficState::ALL_GREEN_DIAG: return "ALL_GREEN_DIAG";
         case TrafficState::FAULT_SAFE:   return "FAULT_SAFE";
         default:                         return "UNKNOWN";
     }

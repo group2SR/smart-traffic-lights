@@ -42,7 +42,7 @@ If NVS data is uninitialized, corrupted, or contains any out-of-range timing, se
 
 | Parameter | Default | Allowed Range | Description |
 | :--- | :---: | :---: | :--- |
-| `sensorToMovement[0..5]` | `{1, 1, 0, 0, 2, 2}` | `0 .. 2` | Maps `IR1..IR6` to `MAIN_ROAD (0)`, `SIDE_ROAD (1)`, `PROTECTED_TURN (2)`. |
+| `sensorToMovement[0..5]` | `{0, 0, 1, 1, 2, 2}` | `0 .. 2` | Maps `IR1..IR6` (`GPIO 33, 34, 35, 36, 39, 15`) to `MAIN_ROAD (0)`, `SIDE_ROAD (1)`, `PROTECTED_TURN (2)` (2 independent sensors per road). |
 | `sensorValidatedMask` | `0x00` | `0x00 .. 0x3F` | Bitmask enabling validated physical IR sensors (`0x00` = unvalidated safe default). |
 | `irStabilityMs` | `100 ms` | `10 .. 5000 ms` | Stability filter window before an IR state change is accepted. |
 | `pedDebounceMs` | `50 ms` | `10 .. 2000 ms` | Pushbutton debounce window for `PED1` and `PED2`. |
@@ -81,9 +81,36 @@ If NVS data is uninitialized, corrupted, or contains any out-of-range timing, se
 | `DEMAND` | Display approach demand, waiting time, skipped cycles, and adaptive scores. |
 | `PHASES` | Display movement phases and the active Right-Hand Traffic conflict matrix. |
 | `TIMING` | Display all configured timing intervals. |
+| `TIMING PROTOTYPE` | Load prototype timing defaults (Main 25s, Side 20s, Yellow 3s, All-Red 2s). |
+| `TIMING BENCH` | Load bench demo timings (Main 4s, Side 2s, Yellow 2s, All-Red 1s). |
+| `TIMING MAIN <minG> [yel]` | Configure Main Road minimum green and optional yellow clearance duration (ms). |
+| `TIMING SIDE <minG> [yel]` | Configure Side Road minimum green and optional yellow clearance duration (ms). |
+| `TIMING ALL_RED <ms>` | Configure all-red intersection clearance interval (ms). |
+| `TIMING PED <walk> [clear]` | Configure pedestrian walk and clearance durations (ms). |
+| `COMMISSION IR <1-6> ON/OFF` | Enable or disable physical commissioning on a specific IR channel. |
+| `COMMISSION IR ALL ON/OFF` | Enable or disable physical commissioning on all 6 IR channels. |
 | `CONFIG` | Display hardware driver types, verification status, and controller parameters. |
 | `SAVE` | Validate and save current configuration to ESP32 NVS. |
 | `LOAD` | Load and validate configuration from ESP32 NVS. |
 | `DEFAULTS` | Reset configuration to documented defaults and save to NVS. |
 | `REBOOT` | Perform safe logical reset and restart the ESP32. |
+
+---
+
+## 4. Web Dashboard (`tools/demo_dashboard.html`)
+
+The controller includes an interactive, browser-based monitoring and commissioning dashboard:
+
+- **Location:** `tools/demo_dashboard.html`
+- **Transport:** Native Web Serial API at `115,200 baud` (Google Chrome / Microsoft Edge on Desktop).
+- **Zero Dependencies:** Pure HTML5/CSS3/SVG/ES6 single-file architecture with zero external CDN dependencies.
+- **Features Supported:**
+  1. **T-Junction Live Visualization:** Real-time top-down SVG rendering with Right-Hand Traffic lane geometry, active signal lamps, and 6 IR sensor indicators.
+  2. **Vehicle Signal Status Panel:** Full status indicators for Main Road (27/26/25), Side Road (13/12/14), and Protected Turn (23/22/21) with clear `DISABLED / NOT COMMISSIONED` status badge.
+  3. **Dual Pedestrian Crossings:** Split monitoring for Pedestrian Crossing 1 (Walk 19, DW 18, Button 32) and Crossing 2 (Walk 17, DW 16, Button 4).
+  4. **Six IR Vehicle Detection Sensors:** Dedicated 6-channel status grid displaying GPIOs (33, 34, 35, 36, 39, 15), live raw pin readings, stable detection states, detection/release counts, cycle observed flags, stuck/chatter fault indicators, and per-channel commissioning toggles.
+  5. **Operating Mode Management:** Selection between `MODE FIXED`, `MODE ADAPTIVE` (safety-gated until all 6 IR channels are commissioned), and `MODE MANUAL` (with phase step advancement).
+  6. **Live Remaining Green Countdown:** Real-time progress bar and countdown timer synchronized with firmware elapsed time and configured phase limits.
+  7. **Controller Health & Diagnostics:** Serial health monitoring, stale telemetry detection (>2.8s), active fault mask decoding, recoverable fault clearing, logical reset confirmation, and NVS persistence controls.
+
 
