@@ -116,62 +116,234 @@ public:
         }
         if (strcmp(normalized, "TIMING PROTOTYPE") == 0 || strcmp(normalized, "TIMING FIXED") == 0) {
             ctrl.setTimingConfig(nowMs, TrafficConfig::PROTOTYPE_TIMING_CONFIG);
-            emitLine("TIMING_PROTOTYPE_APPLIED");
+            const bool saved = ctrl.saveConfigToNvs(nowMs);
+            emitLine(saved ? "TIMING_PROTOTYPE_APPLIED: NVS_OK" : "TIMING_PROTOTYPE_APPLIED: NVS_FAIL");
             return SerialCommandResult::OK_EXECUTED;
         }
         if (strcmp(normalized, "TIMING BENCH") == 0) {
             ctrl.setTimingConfig(nowMs, TrafficConfig::BENCH_TIMING_CONFIG);
-            emitLine("TIMING_BENCH_APPLIED");
+            const bool saved = ctrl.saveConfigToNvs(nowMs);
+            emitLine(saved ? "TIMING_BENCH_APPLIED: NVS_OK" : "TIMING_BENCH_APPLIED: NVS_FAIL");
+            return SerialCommandResult::OK_EXECUTED;
+        }
+        if (strncmp(normalized, "TIMING SET ", 11) == 0) {
+            unsigned long mMin = 0, mMax = 0, mYel = 0;
+            unsigned long sMin = 0, sMax = 0, sYel = 0;
+            unsigned long tMin = 0, tMax = 0, tYel = 0;
+            unsigned long pWalk = 0, pClear = 0, ar = 0;
+            const int n = sscanf(normalized + 11, "%lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu",
+                                 &mMin, &mMax, &mYel,
+                                 &sMin, &sMax, &sYel,
+                                 &tMin, &tMax, &tYel,
+                                 &pWalk, &pClear, &ar);
+            if (n < 12) {
+                emitLine("TIMING_REJECTED: Expected 12 arguments: <mMin> <mMax> <mYel> <sMin> <sMax> <sYel> <tMin> <tMax> <tYel> <pWalk> <pClear> <allRed>");
+                return SerialCommandResult::UNKNOWN_INVALID_CMD;
+            }
+            if (mMin < TrafficConfig::MIN_ALLOWED_INTERVAL_MS || mMin > TrafficConfig::MAX_ALLOWED_INTERVAL_MS ||
+                mMax < mMin || mMax > TrafficConfig::MAX_ALLOWED_INTERVAL_MS) {
+                emitLine("TIMING_REJECTED: Main Green bounds invalid (Min>=500, Max>=Min, Max<=120000)");
+                return SerialCommandResult::REJECTED_BY_STATE;
+            }
+            if (sMin < TrafficConfig::MIN_ALLOWED_INTERVAL_MS || sMin > TrafficConfig::MAX_ALLOWED_INTERVAL_MS ||
+                sMax < sMin || sMax > TrafficConfig::MAX_ALLOWED_INTERVAL_MS) {
+                emitLine("TIMING_REJECTED: Side Green bounds invalid (Min>=500, Max>=Min, Max<=120000)");
+                return SerialCommandResult::REJECTED_BY_STATE;
+            }
+            if (tMin < TrafficConfig::MIN_ALLOWED_INTERVAL_MS || tMin > TrafficConfig::MAX_ALLOWED_INTERVAL_MS ||
+                tMax < tMin || tMax > TrafficConfig::MAX_ALLOWED_INTERVAL_MS) {
+                emitLine("TIMING_REJECTED: Turn Green bounds invalid (Min>=500, Max>=Min, Max<=120000)");
+                return SerialCommandResult::REJECTED_BY_STATE;
+            }
+            if (mYel < 1000 || mYel > TrafficConfig::MAX_ALLOWED_INTERVAL_MS ||
+                sYel < 1000 || sYel > TrafficConfig::MAX_ALLOWED_INTERVAL_MS ||
+                tYel < 1000 || tYel > TrafficConfig::MAX_ALLOWED_INTERVAL_MS) {
+                emitLine("TIMING_REJECTED: Yellow clearance must be >= 1000 ms");
+                return SerialCommandResult::REJECTED_BY_STATE;
+            }
+            if (ar < 1000 || ar > TrafficConfig::MAX_ALLOWED_INTERVAL_MS) {
+                emitLine("TIMING_REJECTED: All-Red clearance must be >= 1000 ms");
+                return SerialCommandResult::REJECTED_BY_STATE;
+            }
+            if (pWalk < 1000 || pWalk > TrafficConfig::MAX_ALLOWED_INTERVAL_MS ||
+                pClear < 1000 || pClear > TrafficConfig::MAX_ALLOWED_INTERVAL_MS) {
+                emitLine("TIMING_REJECTED: Pedestrian walk/clearance must be >= 1000 ms");
+                return SerialCommandResult::REJECTED_BY_STATE;
+            }
+
+            TrafficConfig::TimingConfig tc = ctrl.getTimingConfig();
+            tc.mainMinGreenMs = mMin;
+            tc.mainMaxGreenMs = mMax;
+            tc.mainYellowMs   = mYel;
+            tc.sideMinGreenMs = sMin;
+            tc.sideMaxGreenMs = sMax;
+            tc.sideYellowMs   = sYel;
+            tc.turnMinGreenMs = tMin;
+            tc.turnMaxGreenMs = tMax;
+            tc.turnYellowMs   = tYel;
+            tc.pedWalkMs      = pWalk;
+            tc.pedClearanceMs = pClear;
+            tc.allRedMs       = ar;
+
+            if (!ctrl.setTimingConfig(nowMs, tc)) {
+                emitLine("TIMING_REJECTED: Controller validation failed");
+                return SerialCommandResult::REJECTED_BY_STATE;
+            }
+            const bool saved = ctrl.saveConfigToNvs(nowMs);
+            emitLine(saved ? "TIMING_APPLIED: NVS_OK" : "TIMING_APPLIED: NVS_FAIL");
             return SerialCommandResult::OK_EXECUTED;
         }
         if (strncmp(normalized, "TIMING MAIN ", 12) == 0) {
-            unsigned long minG = 0, yel = 0;
-            const int n = sscanf(normalized + 12, "%lu %lu", &minG, &yel);
+            unsigned long minG = 0, yel = 0, maxG = 0;
+            const int n = sscanf(normalized + 12, "%lu %lu %lu", &minG, &yel, &maxG);
             if (n >= 1) {
+                if (minG < TrafficConfig::MIN_ALLOWED_INTERVAL_MS || minG > TrafficConfig::MAX_ALLOWED_INTERVAL_MS) {
+                    emitLine("TIMING_REJECTED: Main Min Green out of bounds (500..120000 ms)");
+                    return SerialCommandResult::REJECTED_BY_STATE;
+                }
+                if (n >= 2 && yel > 0 && yel < 1000) {
+                    emitLine("TIMING_REJECTED: Yellow clearance must be >= 1000 ms");
+                    return SerialCommandResult::REJECTED_BY_STATE;
+                }
+                if (n >= 3 && maxG > 0 && maxG < minG) {
+                    emitLine("TIMING_REJECTED: Main Max Green must be >= Min Green");
+                    return SerialCommandResult::REJECTED_BY_STATE;
+                }
                 TrafficConfig::TimingConfig tc = ctrl.getTimingConfig();
                 tc.mainMinGreenMs = minG;
                 if (n >= 2 && yel > 0) tc.mainYellowMs = yel;
-                if (tc.mainMaxGreenMs < tc.mainMinGreenMs) tc.mainMaxGreenMs = tc.mainMinGreenMs + 5000;
-                ctrl.setTimingConfig(nowMs, tc);
-                emitLine("TIMING_UPDATED");
+                if (n >= 3 && maxG > 0) {
+                    tc.mainMaxGreenMs = maxG;
+                } else if (tc.mainMaxGreenMs < tc.mainMinGreenMs) {
+                    tc.mainMaxGreenMs = tc.mainMinGreenMs + 5000;
+                }
+                if (!ctrl.setTimingConfig(nowMs, tc)) {
+                    emitLine("TIMING_REJECTED: Controller rejected timing configuration");
+                    return SerialCommandResult::REJECTED_BY_STATE;
+                }
+                const bool saved = ctrl.saveConfigToNvs(nowMs);
+                emitLine(saved ? "TIMING_APPLIED: NVS_OK" : "TIMING_APPLIED: NVS_FAIL");
                 return SerialCommandResult::OK_EXECUTED;
             }
+            emitLine("TIMING_REJECTED: Missing arguments for TIMING MAIN");
+            return SerialCommandResult::UNKNOWN_INVALID_CMD;
         }
         if (strncmp(normalized, "TIMING SIDE ", 12) == 0) {
-            unsigned long minG = 0, yel = 0;
-            const int n = sscanf(normalized + 12, "%lu %lu", &minG, &yel);
+            unsigned long minG = 0, yel = 0, maxG = 0;
+            const int n = sscanf(normalized + 12, "%lu %lu %lu", &minG, &yel, &maxG);
             if (n >= 1) {
+                if (minG < TrafficConfig::MIN_ALLOWED_INTERVAL_MS || minG > TrafficConfig::MAX_ALLOWED_INTERVAL_MS) {
+                    emitLine("TIMING_REJECTED: Side Min Green out of bounds (500..120000 ms)");
+                    return SerialCommandResult::REJECTED_BY_STATE;
+                }
+                if (n >= 2 && yel > 0 && yel < 1000) {
+                    emitLine("TIMING_REJECTED: Yellow clearance must be >= 1000 ms");
+                    return SerialCommandResult::REJECTED_BY_STATE;
+                }
+                if (n >= 3 && maxG > 0 && maxG < minG) {
+                    emitLine("TIMING_REJECTED: Side Max Green must be >= Min Green");
+                    return SerialCommandResult::REJECTED_BY_STATE;
+                }
                 TrafficConfig::TimingConfig tc = ctrl.getTimingConfig();
                 tc.sideMinGreenMs = minG;
                 if (n >= 2 && yel > 0) tc.sideYellowMs = yel;
-                if (tc.sideMaxGreenMs < tc.sideMinGreenMs) tc.sideMaxGreenMs = tc.sideMinGreenMs + 5000;
-                ctrl.setTimingConfig(nowMs, tc);
-                emitLine("TIMING_UPDATED");
+                if (n >= 3 && maxG > 0) {
+                    tc.sideMaxGreenMs = maxG;
+                } else if (tc.sideMaxGreenMs < tc.sideMinGreenMs) {
+                    tc.sideMaxGreenMs = tc.sideMinGreenMs + 5000;
+                }
+                if (!ctrl.setTimingConfig(nowMs, tc)) {
+                    emitLine("TIMING_REJECTED: Controller rejected timing configuration");
+                    return SerialCommandResult::REJECTED_BY_STATE;
+                }
+                const bool saved = ctrl.saveConfigToNvs(nowMs);
+                emitLine(saved ? "TIMING_APPLIED: NVS_OK" : "TIMING_APPLIED: NVS_FAIL");
                 return SerialCommandResult::OK_EXECUTED;
             }
+            emitLine("TIMING_REJECTED: Missing arguments for TIMING SIDE");
+            return SerialCommandResult::UNKNOWN_INVALID_CMD;
+        }
+        if (strncmp(normalized, "TIMING TURN ", 12) == 0) {
+            unsigned long minG = 0, yel = 0, maxG = 0;
+            const int n = sscanf(normalized + 12, "%lu %lu %lu", &minG, &yel, &maxG);
+            if (n >= 1) {
+                if (minG < TrafficConfig::MIN_ALLOWED_INTERVAL_MS || minG > TrafficConfig::MAX_ALLOWED_INTERVAL_MS) {
+                    emitLine("TIMING_REJECTED: Turn Min Green out of bounds (500..120000 ms)");
+                    return SerialCommandResult::REJECTED_BY_STATE;
+                }
+                if (n >= 2 && yel > 0 && yel < 1000) {
+                    emitLine("TIMING_REJECTED: Yellow clearance must be >= 1000 ms");
+                    return SerialCommandResult::REJECTED_BY_STATE;
+                }
+                if (n >= 3 && maxG > 0 && maxG < minG) {
+                    emitLine("TIMING_REJECTED: Turn Max Green must be >= Min Green");
+                    return SerialCommandResult::REJECTED_BY_STATE;
+                }
+                TrafficConfig::TimingConfig tc = ctrl.getTimingConfig();
+                tc.turnMinGreenMs = minG;
+                if (n >= 2 && yel > 0) tc.turnYellowMs = yel;
+                if (n >= 3 && maxG > 0) {
+                    tc.turnMaxGreenMs = maxG;
+                } else if (tc.turnMaxGreenMs < tc.turnMinGreenMs) {
+                    tc.turnMaxGreenMs = tc.turnMinGreenMs + 4000;
+                }
+                if (!ctrl.setTimingConfig(nowMs, tc)) {
+                    emitLine("TIMING_REJECTED: Controller rejected timing configuration");
+                    return SerialCommandResult::REJECTED_BY_STATE;
+                }
+                const bool saved = ctrl.saveConfigToNvs(nowMs);
+                emitLine(saved ? "TIMING_APPLIED: NVS_OK" : "TIMING_APPLIED: NVS_FAIL");
+                return SerialCommandResult::OK_EXECUTED;
+            }
+            emitLine("TIMING_REJECTED: Missing arguments for TIMING TURN");
+            return SerialCommandResult::UNKNOWN_INVALID_CMD;
         }
         if (strncmp(normalized, "TIMING ALL_RED ", 15) == 0 || strncmp(normalized, "TIMING ALLRED ", 14) == 0) {
             unsigned long ar = 0;
             const char* arg = (normalized[9] == 'R') ? (normalized + 14) : (normalized + 15);
             if (sscanf(arg, "%lu", &ar) == 1) {
+                if (ar < 1000 || ar > TrafficConfig::MAX_ALLOWED_INTERVAL_MS) {
+                    emitLine("TIMING_REJECTED: All-Red clearance must be >= 1000 ms and <= 120000 ms");
+                    return SerialCommandResult::REJECTED_BY_STATE;
+                }
                 TrafficConfig::TimingConfig tc = ctrl.getTimingConfig();
                 tc.allRedMs = ar;
-                ctrl.setTimingConfig(nowMs, tc);
-                emitLine("TIMING_UPDATED");
+                if (!ctrl.setTimingConfig(nowMs, tc)) {
+                    emitLine("TIMING_REJECTED: Controller rejected timing configuration");
+                    return SerialCommandResult::REJECTED_BY_STATE;
+                }
+                const bool saved = ctrl.saveConfigToNvs(nowMs);
+                emitLine(saved ? "TIMING_APPLIED: NVS_OK" : "TIMING_APPLIED: NVS_FAIL");
                 return SerialCommandResult::OK_EXECUTED;
             }
+            emitLine("TIMING_REJECTED: Missing argument for TIMING ALL_RED");
+            return SerialCommandResult::UNKNOWN_INVALID_CMD;
         }
         if (strncmp(normalized, "TIMING PED ", 11) == 0) {
             unsigned long walk = 0, clear = 0;
             const int n = sscanf(normalized + 11, "%lu %lu", &walk, &clear);
             if (n >= 1) {
+                if (walk < 1000 || walk > TrafficConfig::MAX_ALLOWED_INTERVAL_MS) {
+                    emitLine("TIMING_REJECTED: Pedestrian WALK must be >= 1000 ms");
+                    return SerialCommandResult::REJECTED_BY_STATE;
+                }
+                if (n >= 2 && clear > 0 && clear < 1000) {
+                    emitLine("TIMING_REJECTED: Pedestrian clearance must be >= 1000 ms");
+                    return SerialCommandResult::REJECTED_BY_STATE;
+                }
                 TrafficConfig::TimingConfig tc = ctrl.getTimingConfig();
                 tc.pedWalkMs = walk;
                 if (n >= 2 && clear > 0) tc.pedClearanceMs = clear;
-                ctrl.setTimingConfig(nowMs, tc);
-                emitLine("TIMING_UPDATED");
+                if (!ctrl.setTimingConfig(nowMs, tc)) {
+                    emitLine("TIMING_REJECTED: Controller rejected timing configuration");
+                    return SerialCommandResult::REJECTED_BY_STATE;
+                }
+                const bool saved = ctrl.saveConfigToNvs(nowMs);
+                emitLine(saved ? "TIMING_APPLIED: NVS_OK" : "TIMING_APPLIED: NVS_FAIL");
                 return SerialCommandResult::OK_EXECUTED;
             }
+            emitLine("TIMING_REJECTED: Missing arguments for TIMING PED");
+            return SerialCommandResult::UNKNOWN_INVALID_CMD;
         }
         if (strcmp(normalized, "CONFIG") == 0) {
             emitLine("CONFIG_PRINTED");
@@ -319,15 +491,55 @@ public:
         }
 
         // Automated individual lamp diagnostics
-        if (strcmp(normalized, "DIAG LAMPS") == 0) {
-            return ctrl.startLampDiagnostics(nowMs, 1000)
+        if (strcmp(normalized, "DIAG LAMPS") == 0 || strcmp(normalized, "DIAG LAMPS VEH") == 0) {
+            return ctrl.startLampDiagnostics(nowMs, 1000, 1)
                        ? SerialCommandResult::OK_EXECUTED
                        : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strcmp(normalized, "DIAG LAMPS PED") == 0) {
+            return ctrl.startLampDiagnostics(nowMs, 1000, 2)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strcmp(normalized, "DIAG LAMPS ALL") == 0 || strcmp(normalized, "DIAG 13") == 0) {
+            return ctrl.startLampDiagnostics(nowMs, 1000, 0)
+                       ? SerialCommandResult::OK_EXECUTED
+                       : SerialCommandResult::REJECTED_BY_STATE;
+        }
+        if (strncmp(normalized, "DIAG LAMPS VEH ", 15) == 0) {
+            unsigned long dur = 1000;
+            if (sscanf(normalized + 15, "%lu", &dur) == 1) {
+                return ctrl.startLampDiagnostics(nowMs, dur, 1)
+                           ? SerialCommandResult::OK_EXECUTED
+                           : SerialCommandResult::REJECTED_BY_STATE;
+            }
+            emitLine("COMMAND_REJECTED_UNKNOWN");
+            return SerialCommandResult::UNKNOWN_INVALID_CMD;
+        }
+        if (strncmp(normalized, "DIAG LAMPS PED ", 15) == 0) {
+            unsigned long dur = 1000;
+            if (sscanf(normalized + 15, "%lu", &dur) == 1) {
+                return ctrl.startLampDiagnostics(nowMs, dur, 2)
+                           ? SerialCommandResult::OK_EXECUTED
+                           : SerialCommandResult::REJECTED_BY_STATE;
+            }
+            emitLine("COMMAND_REJECTED_UNKNOWN");
+            return SerialCommandResult::UNKNOWN_INVALID_CMD;
+        }
+        if (strncmp(normalized, "DIAG LAMPS ALL ", 15) == 0) {
+            unsigned long dur = 1000;
+            if (sscanf(normalized + 15, "%lu", &dur) == 1) {
+                return ctrl.startLampDiagnostics(nowMs, dur, 0)
+                           ? SerialCommandResult::OK_EXECUTED
+                           : SerialCommandResult::REJECTED_BY_STATE;
+            }
+            emitLine("COMMAND_REJECTED_UNKNOWN");
+            return SerialCommandResult::UNKNOWN_INVALID_CMD;
         }
         if (strncmp(normalized, "DIAG LAMPS ", 11) == 0) {
             unsigned long dur = 1000;
             if (sscanf(normalized + 11, "%lu", &dur) == 1) {
-                return ctrl.startLampDiagnostics(nowMs, dur)
+                return ctrl.startLampDiagnostics(nowMs, dur, 1)
                            ? SerialCommandResult::OK_EXECUTED
                            : SerialCommandResult::REJECTED_BY_STATE;
             }
@@ -347,13 +559,38 @@ public:
             return SerialCommandResult::OK_EXECUTED;
         }
 
+        // Explicit Isolated Bench Diagnostic Safety Authorization
+        if (strcmp(normalized, "BENCH UNLOCK 0x42454E43") == 0 || strcmp(normalized, "BENCH UNLOCK BENCH") == 0) {
+            if (!TrafficConfig::PERMIT_ALL_GREEN_BENCH_TEST) {
+                emitLine("COMMAND_REJECTED: Multi-green bench mode is disabled in commissioning firmware.");
+                return SerialCommandResult::REJECTED_BY_STATE;
+            }
+            ctrl.unlockBenchDiagnostics(true);
+            emitLine("EVENT: BENCH_DIAGNOSTICS_UNLOCKED | Multi-green bench mode permitted for isolated testing");
+            return SerialCommandResult::OK_EXECUTED;
+        }
+        if (strcmp(normalized, "BENCH LOCK") == 0) {
+            ctrl.unlockBenchDiagnostics(false);
+            ctrl.cancelAllGreenDiagnostics(nowMs, "BENCH_LOCKED");
+            emitLine("EVENT: BENCH_DIAGNOSTICS_LOCKED | Simultaneous greens strictly prohibited");
+            return SerialCommandResult::OK_EXECUTED;
+        }
+
         // Controlled 10-Second ALL-GREEN Diagnostic Test (Hardware Bench Diagnostic Only)
         if (strcmp(normalized, "TEST ALL_GREEN") == 0 || strcmp(normalized, "DIAG ALL_GREEN") == 0) {
+            if (!TrafficConfig::PERMIT_ALL_GREEN_BENCH_TEST) {
+                emitLine("COMMAND_REJECTED: ALL-GREEN test disabled in commissioning firmware. Simultaneous vehicle greens strictly prohibited.");
+                return SerialCommandResult::REJECTED_BY_STATE;
+            }
             return ctrl.startAllGreenDiagnostics(nowMs, 10000)
                        ? SerialCommandResult::OK_EXECUTED
                        : SerialCommandResult::REJECTED_BY_STATE;
         }
         if (strncmp(normalized, "TEST ALL_GREEN ", 15) == 0) {
+            if (!TrafficConfig::PERMIT_ALL_GREEN_BENCH_TEST) {
+                emitLine("COMMAND_REJECTED: ALL-GREEN test disabled in commissioning firmware. Simultaneous vehicle greens strictly prohibited.");
+                return SerialCommandResult::REJECTED_BY_STATE;
+            }
             unsigned long durSec = 10;
             if (sscanf(normalized + 15, "%lu", &durSec) == 1 && durSec >= 1 && durSec <= 30) {
                 return ctrl.startAllGreenDiagnostics(nowMs, durSec * 1000UL)

@@ -1107,6 +1107,75 @@ void test_serial_command_interface_and_invalid_commands(void) {
     TEST_ASSERT_EQUAL(TrafficState::STARTUP_SAFE, ctrl.getState());
 }
 
+// 30b. Test Serial Timing Adjustment, Atomic Updates, and NVS Persistence
+void test_serial_timing_adjustment_atomic_and_nvs_persistence(void) {
+    TrafficController ctrl;
+    ctrl.getStorage().setUseHardwareNvs(false);
+    ctrl.begin(0);
+
+    SerialCommandHandler cmdHandler;
+
+    // 1. Valid TIMING SET with 12 parameters
+    // Main: 22000 28000 3500 | Side: 18000 22000 3000 | Turn: 2500 5000 2000 | Ped: 4500 2500 | AllRed: 2200
+    const char* validTimingSet = "TIMING SET 22000 28000 3500 18000 22000 3000 2500 5000 2000 4500 2500 2200";
+    TEST_ASSERT_EQUAL(SerialCommandResult::OK_EXECUTED,
+                      cmdHandler.executeCommand(1000, validTimingSet, ctrl));
+
+    const TrafficConfig::TimingConfig& t1 = ctrl.getTimingConfig();
+    TEST_ASSERT_EQUAL_UINT32(22000, t1.mainMinGreenMs);
+    TEST_ASSERT_EQUAL_UINT32(28000, t1.mainMaxGreenMs);
+    TEST_ASSERT_EQUAL_UINT32(3500,  t1.mainYellowMs);
+    TEST_ASSERT_EQUAL_UINT32(18000, t1.sideMinGreenMs);
+    TEST_ASSERT_EQUAL_UINT32(22000, t1.sideMaxGreenMs);
+    TEST_ASSERT_EQUAL_UINT32(3000,  t1.sideYellowMs);
+    TEST_ASSERT_EQUAL_UINT32(2500,  t1.turnMinGreenMs);
+    TEST_ASSERT_EQUAL_UINT32(5000,  t1.turnMaxGreenMs);
+    TEST_ASSERT_EQUAL_UINT32(2000,  t1.turnYellowMs);
+    TEST_ASSERT_EQUAL_UINT32(4500,  t1.pedWalkMs);
+    TEST_ASSERT_EQUAL_UINT32(2500,  t1.pedClearanceMs);
+    TEST_ASSERT_EQUAL_UINT32(2200,  t1.allRedMs);
+
+    // Verify NVS persistence: load into a fresh controller
+    TrafficController freshCtrl;
+    freshCtrl.getStorage().setUseHardwareNvs(false);
+    freshCtrl.getStorage().injectRawShadowBlobForTest(ctrl.exportPersistentConfig());
+    TEST_ASSERT_TRUE(freshCtrl.loadConfigFromNvs(1100));
+    TEST_ASSERT_EQUAL_UINT32(22000, freshCtrl.getTimingConfig().mainMinGreenMs);
+    TEST_ASSERT_EQUAL_UINT32(28000, freshCtrl.getTimingConfig().mainMaxGreenMs);
+    TEST_ASSERT_EQUAL_UINT32(4500,  freshCtrl.getTimingConfig().pedWalkMs);
+
+    // 2. TIMING SET with insufficient arguments (<12) must be rejected
+    TEST_ASSERT_EQUAL(SerialCommandResult::UNKNOWN_INVALID_CMD,
+                      cmdHandler.executeCommand(1200, "TIMING SET 20000 30000", ctrl));
+
+    // 3. TIMING SET with MaxGreen < MinGreen must be rejected
+    TEST_ASSERT_EQUAL(SerialCommandResult::REJECTED_BY_STATE,
+                      cmdHandler.executeCommand(1300, "TIMING SET 30000 20000 3000 18000 22000 3000 2500 5000 2000 4500 2500 2200", ctrl));
+
+    // 4. TIMING SET with Yellow < 1000 ms must be rejected
+    TEST_ASSERT_EQUAL(SerialCommandResult::REJECTED_BY_STATE,
+                      cmdHandler.executeCommand(1400, "TIMING SET 20000 30000 500 18000 22000 3000 2500 5000 2000 4500 2500 2200", ctrl));
+
+    // 5. TIMING SET with All-Red < 1000 ms must be rejected
+    TEST_ASSERT_EQUAL(SerialCommandResult::REJECTED_BY_STATE,
+                      cmdHandler.executeCommand(1500, "TIMING SET 20000 30000 3000 18000 22000 3000 2500 5000 2000 4500 2500 500", ctrl));
+
+    // 6. Valid TIMING TURN command with 3 arguments
+    TEST_ASSERT_EQUAL(SerialCommandResult::OK_EXECUTED,
+                      cmdHandler.executeCommand(1600, "TIMING TURN 3000 2500 7000", ctrl));
+    TEST_ASSERT_EQUAL_UINT32(3000, ctrl.getTimingConfig().turnMinGreenMs);
+    TEST_ASSERT_EQUAL_UINT32(2500, ctrl.getTimingConfig().turnYellowMs);
+    TEST_ASSERT_EQUAL_UINT32(7000, ctrl.getTimingConfig().turnMaxGreenMs);
+
+    // 7. TIMING PROTOTYPE restores canonical prototype values and persists
+    TEST_ASSERT_EQUAL(SerialCommandResult::OK_EXECUTED,
+                      cmdHandler.executeCommand(1700, "TIMING PROTOTYPE", ctrl));
+    TEST_ASSERT_EQUAL_UINT32(TrafficConfig::PROTOTYPE_MAIN_MIN_GREEN_MS, ctrl.getTimingConfig().mainMinGreenMs);
+    TEST_ASSERT_EQUAL_UINT32(TrafficConfig::PROTOTYPE_SIDE_MIN_GREEN_MS, ctrl.getTimingConfig().sideMinGreenMs);
+    TEST_ASSERT_EQUAL_UINT32(TrafficConfig::PROTOTYPE_MAIN_YELLOW_MS, ctrl.getTimingConfig().mainYellowMs);
+    TEST_ASSERT_EQUAL_UINT32(TrafficConfig::PROTOTYPE_ALL_RED_MS, ctrl.getTimingConfig().allRedMs);
+}
+
 // 31. Test Every Safety Invariant on 13 Channels & Emergency Priority IR Guard
 void test_every_safety_invariant_13_channels_and_emergency_guard(void) {
     const char* reason = nullptr;
@@ -1158,18 +1227,18 @@ void test_locked_gpio_assignments_and_all_13_signal_outputs(void) {
     TEST_ASSERT_EQUAL_UINT8(25, TrafficConfig::PIN_MAIN_GREEN);
 
     TEST_ASSERT_EQUAL_UINT8(14, TrafficConfig::PIN_SIDE_RED);
-    TEST_ASSERT_EQUAL_UINT8(13, TrafficConfig::PIN_SIDE_YELLOW);
-    TEST_ASSERT_EQUAL_UINT8(12, TrafficConfig::PIN_SIDE_GREEN);
+    TEST_ASSERT_EQUAL_UINT8(12, TrafficConfig::PIN_SIDE_YELLOW);
+    TEST_ASSERT_EQUAL_UINT8(13, TrafficConfig::PIN_SIDE_GREEN);
 
-    TEST_ASSERT_EQUAL_UINT8(23, TrafficConfig::PIN_TURN_RED);
-    TEST_ASSERT_EQUAL_UINT8(22, TrafficConfig::PIN_TURN_YELLOW);
+    TEST_ASSERT_EQUAL_UINT8(22, TrafficConfig::PIN_TURN_RED);
+    TEST_ASSERT_EQUAL_UINT8(23, TrafficConfig::PIN_TURN_YELLOW);
     TEST_ASSERT_EQUAL_UINT8(21, TrafficConfig::PIN_TURN_GREEN);
 
     // 2. Pedestrian signal & button pins
     TEST_ASSERT_EQUAL_UINT8(19, TrafficConfig::PIN_PED1_WALK);
     TEST_ASSERT_EQUAL_UINT8(18, TrafficConfig::PIN_PED1_DONT_WALK);
-    TEST_ASSERT_EQUAL_UINT8(17, TrafficConfig::PIN_PED2_WALK);
-    TEST_ASSERT_EQUAL_UINT8(16, TrafficConfig::PIN_PED2_DONT_WALK);
+    TEST_ASSERT_EQUAL_UINT8(16, TrafficConfig::PIN_PED2_WALK);
+    TEST_ASSERT_EQUAL_UINT8(17, TrafficConfig::PIN_PED2_DONT_WALK);
     TEST_ASSERT_EQUAL_UINT8(32, TrafficConfig::PIN_PED1_BUTTON);
     TEST_ASSERT_EQUAL_UINT8(4,  TrafficConfig::PIN_PED2_BUTTON);
 
@@ -1193,19 +1262,19 @@ void test_locked_gpio_assignments_and_all_13_signal_outputs(void) {
     TEST_ASSERT_EQUAL_INT8(0,  drv.findChannelByGpio(25)); // Main Green
     TEST_ASSERT_EQUAL_INT8(1,  drv.findChannelByGpio(26)); // Main Yellow
     TEST_ASSERT_EQUAL_INT8(2,  drv.findChannelByGpio(27)); // Main Red
-    TEST_ASSERT_EQUAL_INT8(3,  drv.findChannelByGpio(14)); // Side Green
-    TEST_ASSERT_EQUAL_INT8(4,  drv.findChannelByGpio(12)); // Side Yellow
-    TEST_ASSERT_EQUAL_INT8(5,  drv.findChannelByGpio(13)); // Side Red
-    TEST_ASSERT_EQUAL_INT8(6,  drv.findChannelByGpio(21)); // Turn Green
-    TEST_ASSERT_EQUAL_INT8(7,  drv.findChannelByGpio(22)); // Turn Yellow
-    TEST_ASSERT_EQUAL_INT8(8,  drv.findChannelByGpio(23)); // Turn Red
+    TEST_ASSERT_EQUAL_INT8(3,  drv.findChannelByGpio(13)); // Side Green (GPIO 13)
+    TEST_ASSERT_EQUAL_INT8(4,  drv.findChannelByGpio(12)); // Side Yellow (GPIO 12)
+    TEST_ASSERT_EQUAL_INT8(5,  drv.findChannelByGpio(14)); // Side Red (GPIO 14)
+    TEST_ASSERT_EQUAL_INT8(6,  drv.findChannelByGpio(21)); // Turn Green (GPIO 21)
+    TEST_ASSERT_EQUAL_INT8(7,  drv.findChannelByGpio(23)); // Turn Yellow (GPIO 23)
+    TEST_ASSERT_EQUAL_INT8(8,  drv.findChannelByGpio(22)); // Turn Red (GPIO 22)
     TEST_ASSERT_EQUAL_INT8(9,  drv.findChannelByGpio(19)); // Ped 1 Walk
     TEST_ASSERT_EQUAL_INT8(10, drv.findChannelByGpio(18)); // Ped 1 Don't Walk
-    TEST_ASSERT_EQUAL_INT8(11, drv.findChannelByGpio(17)); // Ped 2 Walk
-    TEST_ASSERT_EQUAL_INT8(12, drv.findChannelByGpio(16)); // Ped 2 Don't Walk
+    TEST_ASSERT_EQUAL_INT8(11, drv.findChannelByGpio(16)); // Ped 2 Walk (GPIO 16)
+    TEST_ASSERT_EQUAL_INT8(12, drv.findChannelByGpio(17)); // Ped 2 Don't Walk (GPIO 17)
 }
 
-// 33. Test ALL_RED Physical Lamp Safety (Red GPIOs 27, 13, 23 ON; Green GPIOs 25, 14, 21 OFF)
+// 33. Test ALL_RED Physical Lamp Safety (Red GPIOs 27, 14, 22 ON; Green GPIOs 25, 13, 21 OFF)
 void test_all_red_physical_red_and_green_lamp_mapping(void) {
     const LogicalSignalOutputs allRedLogical = TrafficController::deriveOutputsForState(TrafficState::ALL_RED);
     SignalOutputDriver drv;
@@ -1215,28 +1284,28 @@ void test_all_red_physical_red_and_green_lamp_mapping(void) {
     ElectricalPinStates elec;
     drv.computeElectricalStates(allRedLogical, elec);
 
-    // Physical Red GPIOs (27, 13, 23) and Pedestrian Don't Walk GPIOs (18, 16) MUST be logically ON & energized
+    // Physical Red GPIOs (27, 14, 22) and Pedestrian Don't Walk GPIOs (18, 17) MUST be logically ON & energized
     TEST_ASSERT_TRUE(elec.isLogicalSignalOnForGpio(27));
-    TEST_ASSERT_TRUE(elec.isLogicalSignalOnForGpio(13));
-    TEST_ASSERT_TRUE(elec.isLogicalSignalOnForGpio(23));
+    TEST_ASSERT_TRUE(elec.isLogicalSignalOnForGpio(14));
+    TEST_ASSERT_TRUE(elec.isLogicalSignalOnForGpio(22));
     TEST_ASSERT_TRUE(elec.isLampEnergizedForGpio(27));
-    TEST_ASSERT_TRUE(elec.isLampEnergizedForGpio(13));
-    TEST_ASSERT_TRUE(elec.isLampEnergizedForGpio(23));
+    TEST_ASSERT_TRUE(elec.isLampEnergizedForGpio(14));
+    TEST_ASSERT_TRUE(elec.isLampEnergizedForGpio(22));
     TEST_ASSERT_TRUE(elec.isLampEnergizedForGpio(18));
-    TEST_ASSERT_TRUE(elec.isLampEnergizedForGpio(16));
+    TEST_ASSERT_TRUE(elec.isLampEnergizedForGpio(17));
 
-    // Physical Green GPIOs (25, 14, 21), Yellow GPIOs (26, 12, 22), and Walk GPIOs (19, 17) MUST be OFF
+    // Physical Green GPIOs (25, 13, 21), Yellow GPIOs (26, 12, 23), and Walk GPIOs (19, 16) MUST be OFF
     TEST_ASSERT_FALSE(elec.isLogicalSignalOnForGpio(25));
-    TEST_ASSERT_FALSE(elec.isLogicalSignalOnForGpio(14));
+    TEST_ASSERT_FALSE(elec.isLogicalSignalOnForGpio(13));
     TEST_ASSERT_FALSE(elec.isLogicalSignalOnForGpio(21));
     TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(25));
-    TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(14));
+    TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(13));
     TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(21));
     TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(26));
     TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(12));
-    TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(22));
+    TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(23));
     TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(19));
-    TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(17));
+    TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(16));
 }
 
 // 34. Test Two Independent Sensors Per Road Architecture (Main: 33/34, Side: 35/36, Turn: 39/15)
@@ -1293,21 +1362,21 @@ void test_four_layer_signal_output_driver_abstraction(void) {
 
     // Case A: Unverified Safe Disabled -> Logical is ON, but GPIO, ULN2003A sink, and Physical Lamp are OFF
     drv.computeElectricalStates(sideGreenOut, elec);
-    TEST_ASSERT_TRUE(elec.isLogicalSignalOnForGpio(14));  // Layer 1: Side Green logical ON
-    TEST_ASSERT_FALSE(elec.isGpioDrivenHigh(14));         // Layer 2: ESP32 GPIO 14 driven LOW
-    TEST_ASSERT_FALSE(elec.isUlnSinkActiveForGpio(14));   // Layer 3: ULN2003A sink OFF
-    TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(14));   // Layer 4: Physical lamp OFF
+    TEST_ASSERT_TRUE(elec.isLogicalSignalOnForGpio(13));  // Layer 1: Side Green logical ON (GPIO 13)
+    TEST_ASSERT_FALSE(elec.isGpioDrivenHigh(13));         // Layer 2: ESP32 GPIO 13 driven LOW
+    TEST_ASSERT_FALSE(elec.isUlnSinkActiveForGpio(13));   // Layer 3: ULN2003A sink OFF
+    TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(13));   // Layer 4: Physical lamp OFF
 
     // Case B: ULN2003A Low-Side Active-HIGH -> Logical ON => GPIO HIGH => ULN2003A Sink ON => Lamp ON
     drv.setVehicleDriverConfig(TrafficConfig::OutputDriverType::LOW_SIDE_ULN2003A_ACTIVE_HIGH, true);
     drv.computeElectricalStates(sideGreenOut, elec);
-    TEST_ASSERT_TRUE(elec.isLogicalSignalOnForGpio(14));  // Layer 1: Side Green logical ON
-    TEST_ASSERT_TRUE(elec.isGpioDrivenHigh(14));          // Layer 2: ESP32 GPIO 14 driven HIGH
-    TEST_ASSERT_TRUE(elec.isUlnSinkActiveForGpio(14));    // Layer 3: ULN2003A collector sinks to GND
-    TEST_ASSERT_TRUE(elec.isLampEnergizedForGpio(14));    // Layer 4: Physical lamp energized
-    TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(13));   // Side Red (GPIO 13) OFF
+    TEST_ASSERT_TRUE(elec.isLogicalSignalOnForGpio(13));  // Layer 1: Side Green logical ON (GPIO 13)
+    TEST_ASSERT_TRUE(elec.isGpioDrivenHigh(13));          // Layer 2: ESP32 GPIO 13 driven HIGH
+    TEST_ASSERT_TRUE(elec.isUlnSinkActiveForGpio(13));    // Layer 3: ULN2003A collector sinks to GND
+    TEST_ASSERT_TRUE(elec.isLampEnergizedForGpio(13));    // Layer 4: Physical lamp energized
+    TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(14));   // Side Red (GPIO 14) OFF
     TEST_ASSERT_TRUE(elec.isLampEnergizedForGpio(27));    // Main Red (GPIO 27) ON
-    TEST_ASSERT_TRUE(elec.isLampEnergizedForGpio(23));    // Turn Red (GPIO 23) ON
+    TEST_ASSERT_TRUE(elec.isLampEnergizedForGpio(22));    // Turn Red (GPIO 22) ON
 }
 
 // 36. Test RHT Configuration Validation & RHT Movement Definitions
@@ -1511,8 +1580,8 @@ void test_single_lamp_test_mode_safety_and_interlocks(void) {
     ctrl.getOutputDriver().computeElectricalStates(SignalOutputDriver::buildSingleLampLogicalOutputs(2), elec);
     TEST_ASSERT_TRUE(elec.isLampEnergizedForGpio(27));
     TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(25));
-    TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(13));
-    TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(23));
+    TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(14));
+    TEST_ASSERT_FALSE(elec.isLampEnergizedForGpio(22));
 
     // 3. Triggering FAULT immediately cancels lamp test and forces all outputs OFF
     ctrl.triggerFault(300, "TEST_LAMP_FAULT", FaultCode::OPERATOR_INJECTED_FAULT);
@@ -1955,8 +2024,18 @@ void test_all_green_diagnostic_10s_execution_and_all_red_hold(void) {
     ctrl.update(3000); // -> MAIN_GREEN
     TEST_ASSERT_EQUAL(TrafficState::MAIN_GREEN, ctrl.getState());
 
-    // Initiate controlled 10-second ALL-GREEN test
+    // 1. Without explicit bench unlock, ALL-GREEN test MUST be rejected for junction safety
     const char* rejReason = nullptr;
+    TEST_ASSERT_FALSE(ctrl.startAllGreenDiagnostics(4000, 10000, &rejReason));
+    TEST_ASSERT_NOT_NULL(rejReason);
+    TEST_ASSERT_FALSE(ctrl.isAllGreenTestActive());
+    TEST_ASSERT_EQUAL(TrafficState::MAIN_GREEN, ctrl.getState());
+
+    // 2. Unlock explicit isolated bench mode
+    ctrl.unlockBenchDiagnostics(true);
+    TEST_ASSERT_TRUE(ctrl.isBenchDiagnosticsUnlocked());
+
+    // Initiate controlled 10-second ALL-GREEN test with explicit bench unlock
     const bool started = ctrl.startAllGreenDiagnostics(5000, 10000, &rejReason);
     TEST_ASSERT_TRUE(started);
     TEST_ASSERT_TRUE(ctrl.isAllGreenTestActive());
@@ -2014,6 +2093,7 @@ void test_all_green_diagnostic_abort_recovery(void) {
     TrafficController ctrl;
     ctrl.begin(0);
     ctrl.commissionVehicleDriver(50, true);
+    ctrl.unlockBenchDiagnostics(true);
     ctrl.update(1000);
     ctrl.update(3000);
     TEST_ASSERT_EQUAL(TrafficState::MAIN_GREEN, ctrl.getState());
@@ -2046,7 +2126,13 @@ void test_all_green_conflicting_greens_prevented_in_normal_states(void) {
     TEST_ASSERT_FALSE(TrafficController::verifySafetyInvariants(TrafficState::MAIN_GREEN, illegalOut, &reason));
     TEST_ASSERT_EQUAL_STRING("CONFLICTING_VEHICLE_GREENS", reason);
 
-    // 2. Verify ALL_GREEN test is rejected if system is in FAULT_SAFE
+    // 2. Verify ALL_GREEN test is rejected by default in normal operational / commissioning mode
+    const char* lockedReason = nullptr;
+    TEST_ASSERT_FALSE(ctrl.startAllGreenDiagnostics(1500, 10000, &lockedReason));
+    TEST_ASSERT_NOT_NULL(lockedReason);
+
+    // 3. Verify ALL_GREEN test is rejected if system is in FAULT_SAFE even if unlocked
+    ctrl.unlockBenchDiagnostics(true);
     ctrl.triggerFault(2000, "OPERATOR_INJECTED_FAULT");
     TEST_ASSERT_EQUAL(TrafficState::FAULT_SAFE, ctrl.getState());
     const char* rejReason = nullptr;
@@ -2431,6 +2517,7 @@ void setup() {
     RUN_TEST(test_invalid_sensor_and_demand_config_rejection);
     RUN_TEST(test_nvs_persistence_save_load_and_corruption_fallback);
     RUN_TEST(test_serial_command_interface_and_invalid_commands);
+    RUN_TEST(test_serial_timing_adjustment_atomic_and_nvs_persistence);
     RUN_TEST(test_every_safety_invariant_13_channels_and_emergency_guard);
     RUN_TEST(test_locked_gpio_assignments_and_all_13_signal_outputs);
     RUN_TEST(test_all_red_physical_red_and_green_lamp_mapping);

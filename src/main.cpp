@@ -110,7 +110,13 @@ void printHelp() {
     Serial.println(F("  PHASES        - Print movement phases & Keep-Right conflict matrix"));
     Serial.println(F("  TIMING        - Print active phase timing intervals"));
     Serial.println(F("  TIMING PROTOTYPE - Apply authoritative prototype fixed timings (25s/3s/2s/20s/3s/2s)"));
-    Serial.println(F("  TIMING MAIN <minG> [yel] | TIMING SIDE <minG> [yel] | TIMING ALL_RED <ms>"));
+    Serial.println(F("  TIMING BENCH  - Apply rapid bench test timings (4s/2s/1s/2s/2s/1s)"));
+    Serial.println(F("  TIMING MAIN <minG> [yel] [maxG] - Configure Main Road phase timing"));
+    Serial.println(F("  TIMING SIDE <minG> [yel] [maxG] - Configure Side Road phase timing"));
+    Serial.println(F("  TIMING TURN <minG> [yel] [maxG] - Configure Protected Turn phase timing"));
+    Serial.println(F("  TIMING ALL_RED <ms>             - Configure intersection all-red clearance"));
+    Serial.println(F("  TIMING PED <walk> [clear]       - Configure Pedestrian walk and clearance"));
+    Serial.println(F("  TIMING SET <mMin> <mMax> <mYel> <sMin> <sMax> <sYel> <tMin> <tMax> <tYel> <pWalk> <pClear> <allRed> - Set all phase timings atomically & persist"));
     Serial.println(F("  CONFIG        - Print hardware driver & persistent config summary"));
     Serial.println(F("  COMMISSION    - Print hardware commissioning & verification checklist"));
     Serial.println(F("  DRIVER VEH <DIRECT_ACTIVE_HIGH|HIGH_SIDE_ACTIVE_HIGH|HIGH_SIDE_ACTIVE_LOW|DISABLED>"));
@@ -378,16 +384,16 @@ void printLampDiagReport() {
                   static_cast<unsigned long>(diag.clearanceDurationMs));
     const TrafficController::AllGreenDiagnosticSession& ag = controller.getAllGreenDiagnosticSession();
     Serial.printf("  ALL-GREEN Test (10s): %s | Duration: %lu ms | Remaining: %lu ms\r\n",
-                  ag.active ? "RUNNING (GPIO 25, 12, 21 ON)" : (ag.completed ? "COMPLETED (Holding ALL-RED)" : (ag.aborted ? "ABORTED" : "IDLE")),
+                  ag.active ? "RUNNING (GPIO 25, 13, 21 ON)" : (ag.completed ? "COMPLETED (Holding ALL-RED)" : (ag.aborted ? "ABORTED" : "IDLE")),
                   static_cast<unsigned long>(ag.durationMs),
                   static_cast<unsigned long>(controller.getAllGreenRemainingMs(millis())));
-    Serial.println(F("-----------------------------------------------------------------"));
+    Serial.println(F("--- VEHICLE SIGNALS (9 OUTPUTS) ---------------------------------"));
     for (uint8_t i = 0; i < 9; ++i) {
         const auto& rec = diag.records[i];
         const bool isGreen = (strstr(rec.channelName, "_G") != nullptr);
         const char* physStatus = rec.tested
             ? (isGreen ? "FAILED (Vf ~3.2V > 3.3V; requires +5V High-Side Driver)" : "VERIFIED (Illuminates)")
-            : "NOT TESTED (Run DIAG LAMPS)";
+            : "NOT TESTED (Run DIAG LAMPS VEH or DIAG 13)";
         Serial.printf("  %-7s (GPIO %2u) : Commanded=%s | PinHigh=%d (3.3V) | Physical=%s\r\n",
                       rec.channelName,
                       rec.gpioPin,
@@ -395,8 +401,22 @@ void printLampDiagReport() {
                       rec.pinLevelHigh ? 1 : 0,
                       physStatus);
     }
+    Serial.println(F("--- PEDESTRIAN SIGNALS (4 OUTPUTS) ------------------------------"));
+    for (uint8_t i = 9; i < 13; ++i) {
+        const auto& rec = diag.records[i];
+        const char* physStatus = rec.tested
+            ? "VERIFIED (ULN2003A Low-Side Sink)"
+            : "NOT TESTED (Run DIAG LAMPS PED or DIAG 13)";
+        Serial.printf("  %-7s (GPIO %2u) : Commanded=%s | PinHigh=%d (3.3V) | Physical=%s\r\n",
+                      rec.channelName,
+                      rec.gpioPin,
+                      rec.commandedOn ? "ON" : "OFF",
+                      rec.pinLevelHigh ? 1 : 0,
+                      physStatus);
+    }
+    Serial.println(F("-----------------------------------------------------------------"));
     Serial.println(F("  INTERLOCK: Turn approach is operational and SAFETY LOCKED (holds RED) during normal sequencing."));
-    Serial.println(F("             All 9 vehicle lamp outputs are initialized, verified and safely diagnosable."));
+    Serial.println(F("             All 13 signal lamp outputs are initialized, verified and safely diagnosable."));
     Serial.println(F("-----------------------------------------------------------------"));
     Serial.println(F("  ELECTRICAL DIAGNOSIS:"));
     Serial.println(F("    - Vehicle modules are 5V common-ground (cathode) assemblies."));
@@ -427,6 +447,8 @@ void onSerialPrinterMarker(const char* marker) {
         printCommissionStatus();
     } else if (strcmp(marker, "DIAG_REPORT_PRINTED") == 0) {
         printLampDiagReport();
+    } else {
+        Serial.println(marker);
     }
 }
 
