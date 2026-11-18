@@ -122,16 +122,18 @@ public:
         uint32_t clearanceDurationMs;
         uint8_t  currentStep;
         ControlMode restoreMode;
-        LampDiagnosticRecord records[9]; // Main R, Y, G, Side R, Y, G, Turn R, Y, G
+        uint8_t  totalLamps;
+        uint8_t  startIdx;
+        LampDiagnosticRecord records[13]; // 9 Vehicle (0..8) + 4 Pedestrian (9..12)
     };
 
-    bool startLampDiagnostics(uint32_t nowMs, uint32_t holdMs = 1000, const char** rejectReason = nullptr);
+    bool startLampDiagnostics(uint32_t nowMs, uint32_t holdMs = 1000, uint8_t groupType = 1, const char** rejectReason = nullptr);
     void cancelLampDiagnostics(uint32_t nowMs);
     bool isLampDiagnosticsActive() const { return diagSession_.active; }
     const LampDiagnosticSession& getLampDiagnosticSession() const { return diagSession_; }
 
     // ========================================================================
-    // 10-SECOND ALL-GREEN HARDWARE DIAGNOSTIC TEST (BENCH ONLY)
+    // 10-SECOND ALL-GREEN HARDWARE DIAGNOSTIC TEST (ISOLATED BENCH ONLY)
     // ========================================================================
     struct AllGreenDiagnosticSession {
         bool        active;
@@ -143,6 +145,8 @@ public:
         char        abortReason[32];
     };
 
+    void unlockBenchDiagnostics(bool unlock) { benchDiagnosticsUnlocked_ = unlock; }
+    bool isBenchDiagnosticsUnlocked() const { return benchDiagnosticsUnlocked_; }
     bool startAllGreenDiagnostics(uint32_t nowMs, uint32_t durationMs = 10000, const char** rejectReason = nullptr);
     void cancelAllGreenDiagnostics(uint32_t nowMs, const char* reason = "OPERATOR_ABORT");
     bool isAllGreenTestActive() const { return allGreenSession_.active; }
@@ -303,6 +307,7 @@ private:
     bool     postPedClearanceActive_;
     bool     manualStepRequested_;
     bool     allGreenHoldActive_;
+    bool     benchDiagnosticsUnlocked_;
 
     FaultManager         faultMgr_;
     VehicleDetector      detector_;

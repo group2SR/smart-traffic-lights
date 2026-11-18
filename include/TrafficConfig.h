@@ -139,16 +139,16 @@ constexpr uint8_t PIN_MAIN_GREEN                  = 25; // OUTPUT (Locked: Main 
 
 // Vehicle Signal Group 2: Side Road (RYG)
 // Note on GPIO 12: ESP32 MTDI boot-strapping pin (selects VDD_SDIO flash voltage
-// at reset: LOW = 3.3V, HIGH = 1.8V). Connected to the Side Green LED anode
+// at reset: LOW = 3.3V, HIGH = 1.8V). Connected to the Side Yellow LED anode
 // (cathode to GND), which holds GPIO 12 at 0V (LOW) during reset; do not
 // attach external pull-ups to GPIO 12.
 constexpr uint8_t PIN_SIDE_RED                    = 14; // OUTPUT (Locked: Side Road Red)
-constexpr uint8_t PIN_SIDE_YELLOW                 = 13; // OUTPUT (Locked: Side Road Yellow)
-constexpr uint8_t PIN_SIDE_GREEN                  = 12; // OUTPUT (Locked: Side Road Green; MTDI strap)
+constexpr uint8_t PIN_SIDE_YELLOW                 = 12; // OUTPUT (Locked: Side Road Yellow; MTDI strap)
+constexpr uint8_t PIN_SIDE_GREEN                  = 13; // OUTPUT (Locked: Side Road Green)
 
 // Vehicle Signal Group 3: Turn Movement / Protected Turn (RYG)
-constexpr uint8_t PIN_TURN_RED                    = 23; // OUTPUT (Locked: Turn Movement Red)
-constexpr uint8_t PIN_TURN_YELLOW                 = 22; // OUTPUT (Locked: Turn Movement Yellow)
+constexpr uint8_t PIN_TURN_RED                    = 22; // OUTPUT (Locked: Turn Movement Red)
+constexpr uint8_t PIN_TURN_YELLOW                 = 23; // OUTPUT (Locked: Turn Movement Yellow)
 constexpr uint8_t PIN_TURN_GREEN                  = 21; // OUTPUT (Locked: Turn Movement Green)
 
 // Pedestrian Signal Group 1 (Walk = Green, Don't Walk = Red)
@@ -159,8 +159,8 @@ constexpr uint8_t PIN_PED_WALK                    = PIN_PED1_WALK;
 constexpr uint8_t PIN_PED_DONT_WALK               = PIN_PED1_DONT_WALK;
 
 // Pedestrian Signal Group 2 (Walk = Green, Don't Walk = Red)
-constexpr uint8_t PIN_PED2_WALK                   = 17; // OUTPUT (Locked: Pedestrian 2 Walk)
-constexpr uint8_t PIN_PED2_DONT_WALK              = 16; // OUTPUT (Locked: Pedestrian 2 Don't Walk)
+constexpr uint8_t PIN_PED2_WALK                   = 16; // OUTPUT (Locked: Pedestrian 2 Walk)
+constexpr uint8_t PIN_PED2_DONT_WALK              = 17; // OUTPUT (Locked: Pedestrian 2 Don't Walk)
 
 // Pedestrian Pushbutton Inputs (Active LOW with INPUT_PULLUP)
 constexpr uint8_t PIN_PED1_BUTTON                 = 32; // INPUT_PULLUP (Locked: Pedestrian Button 1)
@@ -271,26 +271,26 @@ constexpr uint8_t SIGNAL_OUTPUT_PINS[TOTAL_SIGNAL_OUTPUTS] = {
     PIN_MAIN_GREEN,     // [0]  GPIO 25
     PIN_MAIN_YELLOW,    // [1]  GPIO 26
     PIN_MAIN_RED,       // [2]  GPIO 27
-    PIN_SIDE_GREEN,     // [3]  GPIO 12
-    PIN_SIDE_YELLOW,    // [4]  GPIO 13
+    PIN_SIDE_GREEN,     // [3]  GPIO 13 (was 12)
+    PIN_SIDE_YELLOW,    // [4]  GPIO 12 (was 13)
     PIN_SIDE_RED,       // [5]  GPIO 14
     PIN_TURN_GREEN,     // [6]  GPIO 21
-    PIN_TURN_YELLOW,    // [7]  GPIO 22
-    PIN_TURN_RED,       // [8]  GPIO 23
+    PIN_TURN_YELLOW,    // [7]  GPIO 23 (was 22)
+    PIN_TURN_RED,       // [8]  GPIO 22 (was 23)
     PIN_PED1_WALK,      // [9]  GPIO 19
     PIN_PED1_DONT_WALK, // [10] GPIO 18
-    PIN_PED2_WALK,      // [11] GPIO 17
-    PIN_PED2_DONT_WALK  // [12] GPIO 16
+    PIN_PED2_WALK,      // [11] GPIO 16 (was 17)
+    PIN_PED2_DONT_WALK  // [12] GPIO 17 (was 16)
 };
 
 // ============================================================================
 // ELECTRICAL DRIVER & HARDWARE VALIDATION CONFIGURATION
 // ============================================================================
 // Confirmed physical wiring topology:
-//   - All 9 vehicle lamp channels (MAIN 27/26/25, SIDE 14/13/12, TURN 23/22/21)
+//   - All 9 vehicle lamp channels (MAIN 27/26/25, SIDE 14/12/13, TURN 22/23/21)
 //     are connected directly to ESP32 GPIOs (OutputDriverType::DIRECT_ACTIVE_HIGH:
 //     logical ON = ESP32 GPIO HIGH 3.3V, logical OFF = ESP32 GPIO LOW 0V).
-//   - All 4 pedestrian lamp channels (PED1 19/18, PED2 17/16) are connected
+//   - All 4 pedestrian lamp channels (PED1 19/18, PED2 16/17) are connected
 //     through ULN2003A low-side Darlington drivers (OutputDriverType::LOW_SIDE_ULN2003A_ACTIVE_HIGH:
 //     logical ON = ESP32 GPIO HIGH -> ULN2003A output sinks current LOW to GND).
 //
@@ -327,6 +327,14 @@ constexpr bool PED_ULN2003A_DRIVER_VERIFIED       = true;
 constexpr bool PHYSICAL_IR_VALIDATED              = true;
 constexpr bool PROTECTED_TURN_GEOMETRY_VERIFIED   = true;
 #endif
+
+// Safety gate: Simultaneous multi-movement ALL-GREEN activation is strictly prohibited
+// in normal diagnostic and commissioning modes to prevent catastrophic conflicting greens
+// on live traffic junctions. Only permissible with explicit compile-time bench unlock.
+#ifndef ALLOW_UNSAFE_ALL_GREEN_BENCH_TEST
+#define ALLOW_UNSAFE_ALL_GREEN_BENCH_TEST 0
+#endif
+constexpr bool PERMIT_ALL_GREEN_BENCH_TEST = (ALLOW_UNSAFE_ALL_GREEN_BENCH_TEST != 0);
 
 // Input Polarity & Filtering Defaults
 constexpr bool     PED_BTN_ACTIVE_LOW    = true;

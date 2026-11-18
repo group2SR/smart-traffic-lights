@@ -22,19 +22,19 @@ The controller is an **ESP32-WROOM-32 30-pin development board** featuring two 1
            LEFT HEADER (J1)                              RIGHT HEADER (J2)
    Pin  Silk    GPIO   Function                 Function   GPIO   Silk   Pin
   +----+-------+------+-----------------------+----------+------+-------+----+
-  |  1 | EN    | CHIP | Enable / Reset Button | V_SPI_D  | GPIO23| D23   |  1 | (Turn Red)
-  |  2 | VP    | GPI36| IR4: Side Rear S2     | I2C SCL  | GPIO22| D22   |  2 | (Turn Yellow)
+  |  1 | EN    | CHIP | Enable / Reset Button | V_SPI_D  | GPIO23| D23   |  1 | (Turn Yellow)
+  |  2 | VP    | GPI36| IR4: Side Rear S2     | I2C SCL  | GPIO22| D22   |  2 | (Turn Red)
   |  3 | VN    | GPI39| IR5: Turn Front S1    | UART0 TX | GPIO1 | TX0   |  3 | (USB Telemetry)
   |  4 | D34   | GPI34| IR2: Main Rear S2     | UART0 RX | GPIO3 | RX0   |  4 | (USB Commands)
   |  5 | D35   | GPI35| IR3: Side Front S1    | I2C SDA  | GPIO21| D21   |  5 | (Turn Green)
   |  6 | D32   | GPIO32| PED1 Pushbutton      | V_SPI_Q  | GPIO19| D19   |  6 | (Ped 1 Walk)
   |  7 | D33   | GPIO33| IR1: Main Front S1   | V_SPI_CLK| GPIO18| D18   |  7 | (Ped 1 Don't Walk)
   |  8 | D25   | GPIO25| Main Green           | Unused   | GPIO5 | D5    |  8 | (Spare)
-  |  9 | D26   | GPIO26| Main Yellow          | U2TXD    | GPIO17| TX2   |  9 | (Ped 2 Walk)
-  | 10 | D27   | GPIO27| Main Red             | U2RXD    | GPIO16| RX2   | 10 | (Ped 2 Don't Walk)
+  |  9 | D26   | GPIO26| Main Yellow          | U2TXD    | GPIO17| TX2   |  9 | (Ped 2 Don't Walk)
+  | 10 | D27   | GPIO27| Main Red             | U2RXD    | GPIO16| RX2   | 10 | (Ped 2 Walk)
   | 11 | D14   | GPIO14| Side Red             | Touch 0  | GPIO4 | D4    | 11 | (PED2 Pushbutton)
-  | 12 | D12   | GPIO12| Side Green (MTDI)    | Boot/LED | GPIO2 | D2    | 12 | (Spare / Strap)
-  | 13 | D13   | GPIO13| Side Yellow          | MTDO     | GPIO15| D15   | 13 | (IR6: Turn Rear S2)
+  | 12 | D12   | GPIO12| Side Yellow (MTDI)   | Boot/LED | GPIO2 | D2    | 12 | (Spare / Strap)
+  | 13 | D13   | GPIO13| Side Green           | MTDO     | GPIO15| D15   | 13 | (IR6: Turn Rear S2)
   | 14 | GND   | GND  | Ground Rail           | Ground   | GND   | GND   | 14 | (Ground Rail)
   | 15 | VIN   | 5V   | External +5V Power    | Reg Out  | 3.3V  | 3V3   | 15 | (3.3V LDO Rail)
   +----+-------+------+-----------------------+----------+------+-------+----+
@@ -51,10 +51,10 @@ Every single one of the 21 traffic-control channels and 2 USB serial channels is
 | Subsystem | Required Channels | Allocated GPIOs | Physical 30-Pin Positions | Availability Verification |
 | :--- | :---: | :--- | :--- | :---: |
 | **Main Road Traffic Light** | 3 | Red=27, Yel=26, Grn=25 | Left Header Pins 10, 9, 8 | **CONFIRMED** |
-| **Side Road Traffic Light** | 3 | Red=14, Yel=13, Grn=12 | Left Header Pins 11, 13, 12 | **CONFIRMED** |
-| **Turn Road Traffic Light** | 3 | Red=23, Yel=22, Grn=21 | Right Header Pins 1, 2, 5 | **CONFIRMED** |
+| **Side Road Traffic Light** | 3 | Red=14, Yel=12, Grn=13 | Left Header Pins 11, 12, 13 | **CONFIRMED** |
+| **Turn Road Traffic Light** | 3 | Red=22, Yel=23, Grn=21 | Right Header Pins 2, 1, 5 | **CONFIRMED** |
 | **Pedestrian 1 Signal** | 2 | Walk=19, Don't Walk=18 | Right Header Pins 6, 7 | **CONFIRMED** |
-| **Pedestrian 2 Signal** | 2 | Walk=17, Don't Walk=16 | Right Header Pins 9 (`TX2`), 10 (`RX2`) | **CONFIRMED** |
+| **Pedestrian 2 Signal** | 2 | Walk=16, Don't Walk=17 | Right Header Pins 10 (`RX2`), 9 (`TX2`) | **CONFIRMED** |
 | **Pedestrian Pushbuttons** | 2 | Button 1=32, Button 2=4 | Left Pin 6 (`D32`), Right Pin 11 (`D4`) | **CONFIRMED** |
 | **Main Road IR Sensors** | 2 | IR1=33, IR2=34 | Left Pin 7 (`D33`), Left Pin 4 (`D34`) | **CONFIRMED** |
 | **Side Road IR Sensors** | 2 | IR3=35, IR4=36 | Left Pin 5 (`D35`), Left Pin 2 (`VP`) | **CONFIRMED** |
@@ -82,15 +82,15 @@ Every single one of the 21 traffic-control channels and 2 USB serial channels is
 - **30-Pin Exposure**: On the 30-pin board, GPIO 16 is physically brought out to Right Pin 10 (silk-screened `RX2`), and GPIO 17 is physically brought out to Right Pin 9 (silk-screened `TX2`).
 - **Internal Flash / PSRAM Verification**: Standard ESP32-WROOM-32 modules (without external SPI PSRAM) do not use GPIO 16/17 for flash memory. The integrated SPI flash is connected exclusively to internal pins GPIO 6–11 (which are not broken out on the 30-pin board header, eliminating any accidental contention risk).
 - **Assigned Channels**:
-  - `GPIO 17` (`TX2`, Right Pin 9)  $\rightarrow$ `PIN_PED2_WALK` (Pedestrian 2 Walk LED via ULN2003A)
-  - `GPIO 16` (`RX2`, Right Pin 10) $\rightarrow$ `PIN_PED2_DONT_WALK` (Pedestrian 2 Don't Walk LED via ULN2003A)
+  - `GPIO 16` (`RX2`, Right Pin 10) $\rightarrow$ `PIN_PED2_WALK` (Pedestrian 2 Walk LED via ULN2003A)
+  - `GPIO 17` (`TX2`, Right Pin 9)  $\rightarrow$ `PIN_PED2_DONT_WALK` (Pedestrian 2 Don't Walk LED via ULN2003A)
 - **Status**: Both pins are verified fully functional as push-pull digital outputs driving the ULN2003A driver.
 
 ### 3.3 Boot-Strapping Pin Implications: GPIO 12 (`MTDI`) and GPIO 15 (`MTDO`)
 - **GPIO 12 (`MTDI`, Left Pin 12)**:
   - **Function**: Boot-strapping pin for internal flash voltage LDO (`VDD_SDIO`).
   - **Behavior**: If sampled `HIGH` ($3.3\text{ V}$) at power-on reset, the ESP32 selects $1.8\text{ V}$ for SPI flash power, causing immediate boot failure from $3.3\text{ V}$ flash. If sampled `LOW` ($0\text{ V}$), it selects $3.3\text{ V}$ flash operation.
-  - **Project Circuit**: Connected to `PIN_SIDE_GREEN = 12`. The Side Green LED anode is tied to GPIO 12 with its cathode returning to circuit ground. During bootloader sampling, the unenergized LED and series resistor naturally hold GPIO 12 at $0\text{ V}$ (LOW), guaranteeing normal 3.3V boot.
+  - **Project Circuit**: Connected to `PIN_SIDE_YELLOW = 12`. The Side Yellow LED anode is tied to GPIO 12 with its cathode returning to circuit ground. During bootloader sampling, the unenergized LED and series resistor naturally hold GPIO 12 at $0\text{ V}$ (LOW), guaranteeing normal 3.3V boot.
   - **Safety Warning**: **Never place an external pull-up resistor on GPIO 12.**
 - **GPIO 15 (`MTDO`, Right Pin 13)**:
   - **Function**: Boot-strapping pin for ROM bootloader UART logging.
@@ -109,15 +109,15 @@ All 21 physical signal assignments are locked and defined in `include/TrafficCon
 | **Vehicle 1 (`MAIN`)** | Main Yellow | `PIN_MAIN_YELLOW` | **GPIO 26** | **Left Pin 9** (`D26`) | `OUTPUT` | Active-HIGH; requires +5V high-side sourcing driver |
 | **Vehicle 1 (`MAIN`)** | Main Green | `PIN_MAIN_GREEN` | **GPIO 25** | **Left Pin 8** (`D25`) | `OUTPUT` | Active-HIGH; requires +5V high-side sourcing driver |
 | **Vehicle 2 (`SIDE`)** | Side Red | `PIN_SIDE_RED` | **GPIO 14** | **Left Pin 11** (`D14`) | `OUTPUT` | Active-HIGH; requires +5V high-side sourcing driver |
-| **Vehicle 2 (`SIDE`)** | Side Yellow | `PIN_SIDE_YELLOW` | **GPIO 13** | **Left Pin 13** (`D13`) | `OUTPUT` | Active-HIGH; requires +5V high-side sourcing driver |
-| **Vehicle 2 (`SIDE`)** | Side Green | `PIN_SIDE_GREEN` | **GPIO 12** | **Left Pin 12** (`D12`) | `OUTPUT` | MTDI boot-strap pin; held LOW at reset by LED |
-| **Vehicle 3 (`TURN`)** | Turn Red | `PIN_TURN_RED` | **GPIO 23** | **Right Pin 1** (`D23`) | `OUTPUT` | Active-HIGH; requires +5V high-side sourcing driver |
-| **Vehicle 3 (`TURN`)** | Turn Yellow | `PIN_TURN_YELLOW` | **GPIO 22** | **Right Pin 2** (`D22`) | `OUTPUT` | Active-HIGH; requires +5V high-side sourcing driver |
+| **Vehicle 2 (`SIDE`)** | Side Yellow | `PIN_SIDE_YELLOW` | **GPIO 12** | **Left Pin 12** (`D12`) | `OUTPUT` | MTDI boot-strap pin; held LOW at reset by LED |
+| **Vehicle 2 (`SIDE`)** | Side Green | `PIN_SIDE_GREEN` | **GPIO 13** | **Left Pin 13** (`D13`) | `OUTPUT` | Active-HIGH; requires +5V high-side sourcing driver |
+| **Vehicle 3 (`TURN`)** | Turn Red | `PIN_TURN_RED` | **GPIO 22** | **Right Pin 2** (`D22`) | `OUTPUT` | Active-HIGH; requires +5V high-side sourcing driver |
+| **Vehicle 3 (`TURN`)** | Turn Yellow | `PIN_TURN_YELLOW` | **GPIO 23** | **Right Pin 1** (`D23`) | `OUTPUT` | Active-HIGH; requires +5V high-side sourcing driver |
 | **Vehicle 3 (`TURN`)** | Turn Green | `PIN_TURN_GREEN` | **GPIO 21** | **Right Pin 5** (`D21`) | `OUTPUT` | Active-HIGH; requires +5V high-side sourcing driver |
 | **Pedestrian 1 (`PED1`)**| Ped 1 GREEN (`WALK`) | `PIN_PED1_WALK` | **GPIO 19** | **Right Pin 6** (`D19`) | `OUTPUT` | Compatible with `ULN2003A` low-side current sink |
 | **Pedestrian 1 (`PED1`)**| Ped 1 RED (`DONT_WALK`)| `PIN_PED1_DONT_WALK`| **GPIO 18** | **Right Pin 7** (`D18`) | `OUTPUT` | Compatible with `ULN2003A` low-side current sink |
-| **Pedestrian 2 (`PED2`)**| Ped 2 GREEN (`WALK`) | `PIN_PED2_WALK` | **GPIO 17** | **Right Pin 9** (`TX2`) | `OUTPUT` | Compatible with `ULN2003A` low-side current sink |
-| **Pedestrian 2 (`PED2`)**| Ped 2 RED (`DONT_WALK`)| `PIN_PED2_DONT_WALK`| **GPIO 16** | **Right Pin 10** (`RX2`)| `OUTPUT` | Compatible with `ULN2003A` low-side current sink |
+| **Pedestrian 2 (`PED2`)**| Ped 2 GREEN (`WALK`) | `PIN_PED2_WALK` | **GPIO 16** | **Right Pin 10** (`RX2`)| `OUTPUT` | Compatible with `ULN2003A` low-side current sink |
+| **Pedestrian 2 (`PED2`)**| Ped 2 RED (`DONT_WALK`)| `PIN_PED2_DONT_WALK`| **GPIO 17** | **Right Pin 9** (`TX2`) | `OUTPUT` | Compatible with `ULN2003A` low-side current sink |
 | **Ped Button 1** | Ped 1 Pushbutton | `PIN_PED1_BUTTON` | **GPIO 32** | **Left Pin 6** (`D32`) | `INPUT_PULLUP` | Active-LOW momentary push to `GND` ($50\text{ ms}$ debounce) |
 | **Ped Button 2** | Ped 2 Pushbutton | `PIN_PED2_BUTTON` | **GPIO 4** | **Right Pin 11** (`D4`)| `INPUT_PULLUP` | Active-LOW momentary push to `GND` ($50\text{ ms}$ debounce) |
 | **IR Sensor 1** | Main Road Sensor 1 | `PIN_MAIN_IR_SENSOR_1` | **GPIO 33** | **Left Pin 7** (`D33`) | `INPUT_PULLUP` | Active-LOW, internal pull-up supported |
@@ -142,10 +142,10 @@ All 21 physical signal assignments are locked and defined in `include/TrafficCon
   GPIO 26 (Left Pin 9)  ----->| IN2              OUT2 |-----> Main Yellow Anode
   GPIO 25 (Left Pin 8)  ----->| IN3              OUT3 |-----> Main Green Anode
   GPIO 14 (Left Pin 11) ----->| IN4              OUT4 |-----> Side Red Anode
-  GPIO 13 (Left Pin 13) ----->| IN5              OUT5 |-----> Side Yellow Anode
-  GPIO 12 (Left Pin 12) ----->| IN6              OUT6 |-----> Side Green Anode
-  GPIO 23 (Right Pin 1) ----->| IN7              OUT7 |-----> Turn Red Anode
-  GPIO 22 (Right Pin 2) ----->| IN8              OUT8 |-----> Turn Yellow Anode
+  GPIO 12 (Left Pin 12) ----->| IN5              OUT5 |-----> Side Yellow Anode
+  GPIO 13 (Left Pin 13) ----->| IN6              OUT6 |-----> Side Green Anode
+  GPIO 22 (Right Pin 2) ----->| IN7              OUT7 |-----> Turn Red Anode
+  GPIO 23 (Right Pin 1) ----->| IN8              OUT8 |-----> Turn Yellow Anode
                               |      [Pin 10: GND]    |
                               +-----------------------+
                                           |

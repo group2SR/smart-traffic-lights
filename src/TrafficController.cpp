@@ -18,6 +18,7 @@ TrafficController::TrafficController()
       postPedClearanceActive_(false),
       manualStepRequested_(false),
       allGreenHoldActive_(false),
+      benchDiagnosticsUnlocked_(false),
       diagSession_{},
       allGreenSession_{},
       transitionCb_(nullptr),
@@ -27,6 +28,8 @@ TrafficController::TrafficController()
     diagSession_.clearanceDurationMs = 500;
     diagSession_.currentStep = 0;
     diagSession_.restoreMode = controlMode_;
+    diagSession_.totalLamps = 13;
+    diagSession_.startIdx = 0;
     diagSession_.records[0].channelIdx = 2;
     diagSession_.records[0].gpioPin = TrafficConfig::PIN_MAIN_RED;
     strncpy(diagSession_.records[0].channelName, "MAIN_R", sizeof(diagSession_.records[0].channelName));
@@ -54,6 +57,20 @@ TrafficController::TrafficController()
     diagSession_.records[8].channelIdx = 6;
     diagSession_.records[8].gpioPin = TrafficConfig::PIN_TURN_GREEN;
     strncpy(diagSession_.records[8].channelName, "TURN_G", sizeof(diagSession_.records[8].channelName));
+
+    // Pedestrian signal diagnostic records
+    diagSession_.records[9].channelIdx = 9;
+    diagSession_.records[9].gpioPin = TrafficConfig::PIN_PED1_WALK;
+    strncpy(diagSession_.records[9].channelName, "PED1_W", sizeof(diagSession_.records[9].channelName));
+    diagSession_.records[10].channelIdx = 10;
+    diagSession_.records[10].gpioPin = TrafficConfig::PIN_PED1_DONT_WALK;
+    strncpy(diagSession_.records[10].channelName, "PED1_DW", sizeof(diagSession_.records[10].channelName));
+    diagSession_.records[11].channelIdx = 11;
+    diagSession_.records[11].gpioPin = TrafficConfig::PIN_PED2_WALK;
+    strncpy(diagSession_.records[11].channelName, "PED2_W", sizeof(diagSession_.records[11].channelName));
+    diagSession_.records[12].channelIdx = 12;
+    diagSession_.records[12].gpioPin = TrafficConfig::PIN_PED2_DONT_WALK;
+    strncpy(diagSession_.records[12].channelName, "PED2_DW", sizeof(diagSession_.records[12].channelName));
 
     allGreenSession_.active = false;
     allGreenSession_.startMs = 0;
@@ -83,6 +100,7 @@ void TrafficController::begin(uint32_t nowMs) {
     postPedClearanceActive_ = false;
     manualStepRequested_    = false;
     allGreenHoldActive_     = false;
+    benchDiagnosticsUnlocked_ = false;
 
     outputDriver_.clearLampTest();
     cancelLampDiagnostics(nowMs);
@@ -402,17 +420,43 @@ void TrafficController::stopLampTest(uint32_t nowMs) {
     }
 }
 
-bool TrafficController::startLampDiagnostics(uint32_t nowMs, uint32_t holdMs, const char** rejectReason) {
+bool TrafficController::startLampDiagnostics(uint32_t nowMs, uint32_t holdMs, uint8_t groupType, const char** rejectReason) {
     if (state_ == TrafficState::FAULT_SAFE) {
         if (rejectReason) *rejectReason = "Cannot run lamp diagnostics in FAULT_SAFE (send CLEAR first)";
         logEvent(nowMs, "COMMAND_REJECTED", "Cannot run lamp diagnostics in FAULT_SAFE");
         return false;
     }
-    if (!outputDriver_.isVehicleDriverVerified() ||
-        outputDriver_.getVehicleDriverType() == TrafficConfig::OutputDriverType::UNVERIFIED_SAFE_DISABLED) {
-        if (rejectReason) *rejectReason = "Vehicle output driver is unverified";
-        logEvent(nowMs, "COMMAND_REJECTED", "Vehicle driver unverified");
-        return false;
+
+    if (groupType == 2) {
+        // Pedestrian only
+        if (!outputDriver_.isPedestrianDriverVerified() ||
+            outputDriver_.getPedestrianDriverType() == TrafficConfig::OutputDriverType::UNVERIFIED_SAFE_DISABLED) {
+            if (rejectReason) *rejectReason = "Pedestrian output driver is unverified";
+            logEvent(nowMs, "COMMAND_REJECTED", "Pedestrian driver unverified");
+            return false;
+        }
+    } else if (groupType == 0) {
+        // Complete 13-output sweep
+        if (!outputDriver_.isVehicleDriverVerified() ||
+            outputDriver_.getVehicleDriverType() == TrafficConfig::OutputDriverType::UNVERIFIED_SAFE_DISABLED) {
+            if (rejectReason) *rejectReason = "Vehicle output driver is unverified";
+            logEvent(nowMs, "COMMAND_REJECTED", "Vehicle driver unverified");
+            return false;
+        }
+        if (!outputDriver_.isPedestrianDriverVerified() ||
+            outputDriver_.getPedestrianDriverType() == TrafficConfig::OutputDriverType::UNVERIFIED_SAFE_DISABLED) {
+            if (rejectReason) *rejectReason = "Pedestrian output driver is unverified";
+            logEvent(nowMs, "COMMAND_REJECTED", "Pedestrian driver unverified");
+            return false;
+        }
+    } else {
+        // Vehicle only (groupType == 1 or default)
+        if (!outputDriver_.isVehicleDriverVerified() ||
+            outputDriver_.getVehicleDriverType() == TrafficConfig::OutputDriverType::UNVERIFIED_SAFE_DISABLED) {
+            if (rejectReason) *rejectReason = "Vehicle output driver is unverified";
+            logEvent(nowMs, "COMMAND_REJECTED", "Vehicle driver unverified");
+            return false;
+        }
     }
 
     if (allGreenSession_.active) {
@@ -423,15 +467,30 @@ bool TrafficController::startLampDiagnostics(uint32_t nowMs, uint32_t holdMs, co
         cancelLampDiagnostics(nowMs);
     }
 
+    uint8_t startIdx = 0;
+    uint8_t totalLamps = 9;
+    if (groupType == 2) {
+        startIdx = 9;
+        totalLamps = 4;
+    } else if (groupType == 0) {
+        startIdx = 0;
+        totalLamps = 13;
+    } else {
+        startIdx = 0;
+        totalLamps = 9;
+    }
+
     diagSession_.active              = true;
     diagSession_.stepStartMs         = nowMs;
     diagSession_.holdDurationMs      = (holdMs >= 200 && holdMs <= 10000) ? holdMs : 1000;
     diagSession_.clearanceDurationMs = 500;
     diagSession_.currentStep         = 0;
     diagSession_.restoreMode         = controlMode_;
+    diagSession_.startIdx            = startIdx;
+    diagSession_.totalLamps          = totalLamps;
 
     // Reset records for this session
-    for (uint8_t i = 0; i < 9; ++i) {
+    for (uint8_t i = startIdx; i < startIdx + totalLamps; ++i) {
         diagSession_.records[i].tested            = false;
         diagSession_.records[i].commandedOn       = false;
         diagSession_.records[i].pinLevelHigh      = false;
@@ -455,7 +514,13 @@ bool TrafficController::startLampDiagnostics(uint32_t nowMs, uint32_t holdMs, co
         stateStartMs_ = nowMs;
     }
 
-    logEvent(nowMs, "LAMP_DIAG_START", "Initiated safe 9-lamp diagnostic sequence");
+    if (groupType == 2) {
+        logEvent(nowMs, "LAMP_DIAG_START", "Initiated safe 4-lamp pedestrian diagnostic sequence");
+    } else if (groupType == 0) {
+        logEvent(nowMs, "LAMP_DIAG_START", "Initiated safe 13-output complete diagnostic sequence");
+    } else {
+        logEvent(nowMs, "LAMP_DIAG_START", "Initiated safe 9-lamp vehicle diagnostic sequence");
+    }
     return true;
 }
 
@@ -472,17 +537,18 @@ void TrafficController::updateLampDiagnostics(uint32_t nowMs) {
 
     const uint32_t stepElapsed = nowMs - diagSession_.stepStartMs;
     const uint8_t step = diagSession_.currentStep;
+    const uint8_t maxSteps = diagSession_.totalLamps * 2;
 
     if (step % 2 == 0) {
         // Even step: ALL-RED clearance interval
-        const uint32_t reqClearance = (step == 18) ? 1000U : diagSession_.clearanceDurationMs;
+        const uint32_t reqClearance = (step == maxSteps) ? 1000U : diagSession_.clearanceDurationMs;
         if (stepElapsed >= reqClearance) {
-            if (step >= 18) {
+            if (step >= maxSteps) {
                 // Diagnostic session complete!
                 diagSession_.active = false;
                 outputDriver_.clearLampTest();
                 logEvent(nowMs, "LAMP_DIAG_COMPLETE",
-                         "Completed 9-lamp diagnostic sequence; restored normal operation");
+                         "Completed lamp diagnostic sequence; restored normal operation");
                 controlMode_ = diagSession_.restoreMode;
                 nextTarget_ = NextPhaseTarget::MAIN_ROAD;
                 transitionTo(nowMs, TrafficState::MAIN_GREEN, "DIAG_COMPLETE_TO_MAIN_GREEN");
@@ -490,7 +556,7 @@ void TrafficController::updateLampDiagnostics(uint32_t nowMs) {
             }
 
             // Move to next active lamp test step
-            const uint8_t lampIdx = step / 2; // 0..8
+            const uint8_t lampIdx = diagSession_.startIdx + (step / 2);
             diagSession_.currentStep = step + 1;
             diagSession_.stepStartMs = nowMs;
 
@@ -521,6 +587,11 @@ void TrafficController::updateLampDiagnostics(uint32_t nowMs) {
 }
 
 bool TrafficController::startAllGreenDiagnostics(uint32_t nowMs, uint32_t durationMs, const char** rejectReason) {
+    if (!TrafficConfig::PERMIT_ALL_GREEN_BENCH_TEST || !benchDiagnosticsUnlocked_) {
+        if (rejectReason) *rejectReason = "Simultaneous ALL-GREEN activation is disabled for junction safety. Conflicting greens are prohibited.";
+        logEvent(nowMs, "COMMAND_REJECTED", "ALL-GREEN test disabled: simultaneous vehicle greens prohibited");
+        return false;
+    }
     if (state_ == TrafficState::FAULT_SAFE) {
         if (rejectReason) *rejectReason = "Cannot run ALL-GREEN diagnostics in FAULT_SAFE (send CLEAR first)";
         logEvent(nowMs, "COMMAND_REJECTED", "Cannot run ALL-GREEN diagnostics in FAULT_SAFE");
@@ -558,7 +629,7 @@ bool TrafficController::startAllGreenDiagnostics(uint32_t nowMs, uint32_t durati
 
     transitionTo(nowMs, TrafficState::ALL_GREEN_DIAG, "START_ALL_GREEN_DIAG");
     logEvent(nowMs, "ALL_GREEN_TEST_START",
-             "Commanded GPIO 25, 14, 21 ON simultaneously for 10000 ms; Reds/Yellows/Walks OFF");
+             "Commanded GPIO 25, 13, 21 ON simultaneously for 10000 ms; Reds/Yellows/Walks OFF");
     return true;
 }
 
@@ -1862,11 +1933,20 @@ SignalOutputs TrafficController::deriveOutputsForState(TrafficState state) {
             break;
 
         case TrafficState::ALL_GREEN_DIAG:
-            out.mainGreen    = true;
-            out.sideGreen    = true;
-            out.turnGreen    = true;
-            out.pedDontWalk  = true;
-            out.ped2DontWalk = true;
+            if (TrafficConfig::PERMIT_ALL_GREEN_BENCH_TEST) {
+                out.mainGreen    = true;
+                out.sideGreen    = true;
+                out.turnGreen    = true;
+                out.pedDontWalk  = true;
+                out.ped2DontWalk = true;
+            } else {
+                // Failsafe fallback: All-Red clearance hold if unauthorized
+                out.mainRed      = true;
+                out.sideRed      = true;
+                out.turnRed      = true;
+                out.pedDontWalk  = true;
+                out.ped2DontWalk = true;
+            }
             break;
 
         case TrafficState::FAULT_SAFE:
@@ -1882,20 +1962,25 @@ bool TrafficController::verifySafetyInvariants(TrafficState state,
                                                const char** violationReason) {
     // Hardware Diagnostic Exception: ALL_GREEN_DIAG bench diagnostic test
     if (state == TrafficState::ALL_GREEN_DIAG) {
-        if (!out.mainGreen || !out.sideGreen || !out.turnGreen) {
-            if (violationReason) *violationReason = "ALL_GREEN_DIAG_GREENS_MISSING";
+        if (TrafficConfig::PERMIT_ALL_GREEN_BENCH_TEST) {
+            if (!out.mainGreen || !out.sideGreen || !out.turnGreen) {
+                if (violationReason) *violationReason = "ALL_GREEN_DIAG_GREENS_MISSING";
+                return false;
+            }
+            if (out.mainRed || out.sideRed || out.turnRed ||
+                out.mainYellow || out.sideYellow || out.turnYellow) {
+                if (violationReason) *violationReason = "ALL_GREEN_DIAG_NON_GREENS_ACTIVE";
+                return false;
+            }
+            if (out.pedWalk || out.ped2Walk || !out.pedDontWalk || !out.ped2DontWalk) {
+                if (violationReason) *violationReason = "ALL_GREEN_DIAG_PED_NOT_DONT_WALK";
+                return false;
+            }
+            return true;
+        } else {
+            if (violationReason) *violationReason = "UNAUTHORIZED_ALL_GREEN_DIAGNOSTIC_STATE";
             return false;
         }
-        if (out.mainRed || out.sideRed || out.turnRed ||
-            out.mainYellow || out.sideYellow || out.turnYellow) {
-            if (violationReason) *violationReason = "ALL_GREEN_DIAG_NON_GREENS_ACTIVE";
-            return false;
-        }
-        if (out.pedWalk || out.ped2Walk || !out.pedDontWalk || !out.ped2DontWalk) {
-            if (violationReason) *violationReason = "ALL_GREEN_DIAG_PED_NOT_DONT_WALK";
-            return false;
-        }
-        return true;
     }
 
     // Invariant 1: No two vehicle movements may display GREEN (or YELLOW) simultaneously.

@@ -22,8 +22,8 @@
 - **Confirmed Physical Wiring**:
   - The 9 vehicle lamp channels do **not** pass through the `ULN2003A`. They are connected directly to the ESP32 GPIOs:
     - **Traffic Light 1 (`MAIN`)**: Red = `GPIO 27`, Yellow = `GPIO 26`, Green = `GPIO 25`
-    - **Traffic Light 2 (`SIDE`)**: Red = `GPIO 14`, Yellow = `GPIO 13`, Green = `GPIO 12`
-    - **Traffic Light 3 (`TURN`)**: Red = `GPIO 23`, Yellow = `GPIO 22`, Green = `GPIO 21`
+    - **Traffic Light 2 (`SIDE`)**: Red = `GPIO 14`, Yellow = `GPIO 12`, Green = `GPIO 13`
+    - **Traffic Light 3 (`TURN`)**: Red = `GPIO 22`, Yellow = `GPIO 23`, Green = `GPIO 21`
 - **Polarity (`OutputDriverType::DIRECT_ACTIVE_HIGH`)**:
   - Logical `ON` $\rightarrow$ ESP32 GPIO driven `HIGH` (`3.3V`), `ulnSinkActive = false`, lamp energized (`true` when commissioned).
   - Logical `OFF` $\rightarrow$ ESP32 GPIO driven `LOW` (`0V`), `ulnSinkActive = false`, lamp dark (`false`).
@@ -39,10 +39,10 @@
     - `MAIN_Y` (GPIO 26): `PASS` (Illuminated individually, all other 12 lamps OFF)
     - `MAIN_G` (GPIO 25): `PASS` (Illuminated individually, all other 12 lamps OFF)
     - `SIDE_R` (GPIO 14): `PASS` (Illuminated individually, all other 12 lamps OFF)
-    - `SIDE_Y` (GPIO 13): `PASS` (Illuminated individually, all other 12 lamps OFF)
-    - `SIDE_G` (GPIO 12): `PASS` (Illuminated individually, all other 12 lamps OFF; MTDI strap intact)
-    - `TURN_R` (GPIO 23): `PASS` (Illuminated individually, all other 12 lamps OFF)
-    - `TURN_Y` (GPIO 22): `PASS` (Illuminated individually, all other 12 lamps OFF)
+    - `SIDE_Y` (GPIO 12): `PASS` (Illuminated individually, all other 12 lamps OFF; MTDI strap intact)
+    - `SIDE_G` (GPIO 13): `PASS` (Illuminated individually, all other 12 lamps OFF)
+    - `TURN_R` (GPIO 22): `PASS` (Illuminated individually, all other 12 lamps OFF)
+    - `TURN_Y` (GPIO 23): `PASS` (Illuminated individually, all other 12 lamps OFF)
     - `TURN_G` (GPIO 21): `PASS` (Illuminated individually, all other 12 lamps OFF)
   - Traffic sequence verified:
     `MAIN_GREEN -> MAIN_YELLOW (2s) -> ALL_RED (1s) -> SIDE_GREEN (8s max) -> SIDE_YELLOW (2s) -> ALL_RED (1s) -> MAIN_GREEN`.
@@ -53,7 +53,7 @@
 - **Confirmed Physical Wiring**:
   - Only the 4 pedestrian lamp channels pass through the `ULN2003A` Darlington low-side driver:
     - **Pedestrian 1 (`PED1`)**: Walk = `GPIO 19`, Don't Walk = `GPIO 18`
-    - **Pedestrian 2 (`PED2`)**: Walk = `GPIO 17`, Don't Walk = `GPIO 16`
+    - **Pedestrian 2 (`PED2`)**: Walk = `GPIO 16`, Don't Walk = `GPIO 17`
 - **Polarity (`OutputDriverType::LOW_SIDE_ULN2003A_ACTIVE_HIGH`)**:
   - Logical `ON` $\rightarrow$ ESP32 GPIO driven `HIGH` (`3.3V` at `ULN2003A` `INx`) $\rightarrow$ `ULN2003A` output transistor turns `ON` and pulls `OUTx` `LOW` to `GND` (`ulnSinkActive = true`) $\rightarrow$ common-anode pedestrian LED illuminates.
   - Logical `OFF` $\rightarrow$ ESP32 GPIO driven `LOW` (`0V` at `ULN2003A` `INx`) $\rightarrow$ `ULN2003A` output transistor `OFF` (`ulnSinkActive = false`) $\rightarrow$ pedestrian LED is `OFF`.
@@ -74,15 +74,15 @@
 | **`MAIN_YELLOW`** | **GPIO 26** | Direct ESP32 GPIO (`DIRECT_ACTIVE_HIGH`) | Traffic Light 1 (`MAIN`) `Y` (`GND` to common `GND`) | `GPIO HIGH (3.3V)` -> **Lamp ON**; `GPIO LOW (0V)` -> **OFF** | Safe GP output; `GPIO LOW` at boot = OFF |
 | **`MAIN_GREEN`** | **GPIO 25** | Direct ESP32 GPIO (`DIRECT_ACTIVE_HIGH`) | Traffic Light 1 (`MAIN`) `G` (`GND` to common `GND`) | `GPIO HIGH (3.3V)` -> **Lamp ON**; `GPIO LOW (0V)` -> **OFF** | Safe GP output; `GPIO LOW` at boot = OFF |
 | **`SIDE_RED`** | **GPIO 14** | Direct ESP32 GPIO (`DIRECT_ACTIVE_HIGH`) | Traffic Light 2 (`SIDE`) `R` (`GND` to common `GND`) | `GPIO HIGH (3.3V)` -> **Lamp ON**; `GPIO LOW (0V)` -> **OFF** | Safe GP output; `GPIO LOW` at boot = OFF |
-| **`SIDE_YELLOW`** | **GPIO 13** | Direct ESP32 GPIO (`DIRECT_ACTIVE_HIGH`) | Traffic Light 2 (`SIDE`) `Y` (`GND` to common `GND`) | `GPIO HIGH (3.3V)` -> **Lamp ON**; `GPIO LOW (0V)` -> **OFF** | Safe GP output; `GPIO LOW` at boot = OFF |
-| **`SIDE_GREEN`** | **GPIO 12*** | Direct ESP32 GPIO (`DIRECT_ACTIVE_HIGH`) | Traffic Light 2 (`SIDE`) `G` (`GND` to common `GND`) | `GPIO HIGH (3.3V)` -> **Lamp ON**; `GPIO LOW (0V)` -> **OFF** | *`MTDI` strap: common-cathode LED holds `LOW` at reset (`3.3V` flash); never add pull-up on `GPIO 12` |
-| **`TURN_RED`** | **GPIO 23** | Direct ESP32 GPIO (`DIRECT_ACTIVE_HIGH`) | Traffic Light 3 (`TURN`) `R` (`GND` to common `GND`) | `GPIO HIGH (3.3V)` -> **Lamp ON**; `GPIO LOW (0V)` -> **OFF** | Safe GP output; `GPIO LOW` at boot = OFF |
-| **`TURN_YELLOW`** | **GPIO 22** | Direct ESP32 GPIO (`DIRECT_ACTIVE_HIGH`) | Traffic Light 3 (`TURN`) `Y` (`GND` to common `GND`) | `GPIO HIGH (3.3V)` -> **Lamp ON**; `GPIO LOW (0V)` -> **OFF** | Safe GP output; `GPIO LOW` at boot = OFF |
+| **`SIDE_YELLOW`** | **GPIO 12*** | Direct ESP32 GPIO (`DIRECT_ACTIVE_HIGH`) | Traffic Light 2 (`SIDE`) `Y` (`GND` to common `GND`) | `GPIO HIGH (3.3V)` -> **Lamp ON**; `GPIO LOW (0V)` -> **OFF** | *`MTDI` strap: common-cathode LED holds `LOW` at reset (`3.3V` flash); never add pull-up on `GPIO 12` |
+| **`SIDE_GREEN`** | **GPIO 13** | Direct ESP32 GPIO (`DIRECT_ACTIVE_HIGH`) | Traffic Light 2 (`SIDE`) `G` (`GND` to common `GND`) | `GPIO HIGH (3.3V)` -> **Lamp ON**; `GPIO LOW (0V)` -> **OFF** | Safe GP output; `GPIO LOW` at boot = OFF |
+| **`TURN_RED`** | **GPIO 22** | Direct ESP32 GPIO (`DIRECT_ACTIVE_HIGH`) | Traffic Light 3 (`TURN`) `R` (`GND` to common `GND`) | `GPIO HIGH (3.3V)` -> **Lamp ON**; `GPIO LOW (0V)` -> **OFF** | Safe GP output; `GPIO LOW` at boot = OFF |
+| **`TURN_YELLOW`** | **GPIO 23** | Direct ESP32 GPIO (`DIRECT_ACTIVE_HIGH`) | Traffic Light 3 (`TURN`) `Y` (`GND` to common `GND`) | `GPIO HIGH (3.3V)` -> **Lamp ON**; `GPIO LOW (0V)` -> **OFF** | Safe GP output; `GPIO LOW` at boot = OFF |
 | **`TURN_GREEN`** | **GPIO 21** | Direct ESP32 GPIO (`DIRECT_ACTIVE_HIGH`) | Traffic Light 3 (`TURN`) `G` (`GND` to common `GND`) | `GPIO HIGH (3.3V)` -> **Lamp ON**; `GPIO LOW (0V)` -> **OFF** | Safe GP output; `GPIO LOW` at boot = OFF |
 | **`PED1_WALK`** | **GPIO 19** | `ULN2003A` `IN1 -> OUT1` (`LOW_SIDE_ULN2003A_ACTIVE_HIGH`) | Ped 1 Green (`WALK`) cathode via series resistor (Anode to `+5V`) | `GPIO HIGH (3.3V)` -> `ULN2003A OUT1 LOW` -> **Lamp ON** | Common-anode `+5V`; `GPIO LOW` = OFF |
 | **`PED1_DONT_WALK`** | **GPIO 18** | `ULN2003A` `IN2 -> OUT2` (`LOW_SIDE_ULN2003A_ACTIVE_HIGH`) | Ped 1 Red (`DONT_WALK`) cathode via series resistor (Anode to `+5V`) | `GPIO HIGH (3.3V)` -> `ULN2003A OUT2 LOW` -> **Lamp ON** | Common-anode `+5V`; `GPIO LOW` = OFF |
-| **`PED2_WALK`** | **GPIO 17** | `ULN2003A` `IN3 -> OUT3` (`LOW_SIDE_ULN2003A_ACTIVE_HIGH`) | Ped 2 Green (`WALK`) cathode via series resistor (Anode to `+5V`) | `GPIO HIGH (3.3V)` -> `ULN2003A OUT3 LOW` -> **Lamp ON** | Common-anode `+5V`; `GPIO LOW` = OFF |
-| **`PED2_DONT_WALK`** | **GPIO 16** | `ULN2003A` `IN4 -> OUT4` (`LOW_SIDE_ULN2003A_ACTIVE_HIGH`) | Ped 2 Red (`DONT_WALK`) cathode via series resistor (Anode to `+5V`) | `GPIO HIGH (3.3V)` -> `ULN2003A OUT4 LOW` -> **Lamp ON** | Common-anode `+5V`; `GPIO LOW` = OFF |
+| **`PED2_WALK`** | **GPIO 16** | `ULN2003A` `IN3 -> OUT3` (`LOW_SIDE_ULN2003A_ACTIVE_HIGH`) | Ped 2 Green (`WALK`) cathode via series resistor (Anode to `+5V`) | `GPIO HIGH (3.3V)` -> `ULN2003A OUT3 LOW` -> **Lamp ON** | Common-anode `+5V`; `GPIO LOW` = OFF |
+| **`PED2_DONT_WALK`** | **GPIO 17** | `ULN2003A` `IN4 -> OUT4` (`LOW_SIDE_ULN2003A_ACTIVE_HIGH`) | Ped 2 Red (`DONT_WALK`) cathode via series resistor (Anode to `+5V`) | `GPIO HIGH (3.3V)` -> `ULN2003A OUT4 LOW` -> **Lamp ON** | Common-anode `+5V`; `GPIO LOW` = OFF |
 | **`PED1_BUTTON`** | **GPIO 32** | Direct to ESP32 (`INPUT_PULLUP`) | Ped Button 1 N.O. contact (other side to `GND`) | `Open = HIGH (3.3V)`, `Pressed = LOW (0V)` | 50 ms software debounce; live `RawHigh=1` verified |
 | **`PED2_BUTTON`** | **GPIO 4*** | Direct to ESP32 (`INPUT_PULLUP`) | Ped Button 2 N.O. contact (other side to `GND`) | `Open = HIGH (3.3V)`, `Pressed = LOW (0V)` | *Strapping pin; N.O. button keeps `HIGH` at reset |
 | **`IR1` (Main S1)** | **GPIO 33** | Direct to ESP32 (`INPUT_PULLUP`) | Main Road Sensor 1 `OUT` | `Idle = HIGH (3.3V)`, `Vehicle = LOW (0V)` | 100 ms stability filter; live `RawHigh=1` verified |
