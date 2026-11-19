@@ -10,7 +10,7 @@
 // ============================================================================
 // Locked Hardware Mapping:
 //   - Pedestrian 1 : Walk = GPIO 19, Don't Walk = GPIO 18, Button 1 = GPIO 32
-//   - Pedestrian 2 : Walk = GPIO 17, Don't Walk = GPIO 16, Button 2 = GPIO 4
+//   - Pedestrian 2 : Walk = GPIO 16, Don't Walk = GPIO 17, Button 2 = GPIO 4
 //
 // Responsibilities:
 // - Support two independent pedestrian request buttons (PED1 on GPIO 32, PED2 on GPIO 4).
@@ -26,6 +26,25 @@ enum class PedSignalAspect : uint8_t {
     DONT_WALK = 1, // Pedestrian RED on, GREEN off
     WALK      = 2, // Pedestrian GREEN on, RED off
     CLEARANCE = 3  // Post-walk clearance: Pedestrian RED on, GREEN off, all vehicles held RED
+};
+
+enum class PedestrianPriorityLevel : uint8_t {
+    NONE            = 0,
+    ELEVATED        = 1,
+    MAX_WAIT_URGENT = 2
+};
+
+struct PedestrianPrioritySummary {
+    bool                    anyPending;
+    bool                    ped1Pending;
+    bool                    ped2Pending;
+    uint32_t                ped1WaitMs;
+    uint32_t                ped2WaitMs;
+    uint32_t                maxWaitMs;
+    uint8_t                 maxSkippedCycles;
+    bool                    urgencyActive;
+    bool                    canServeTogether;
+    PedestrianPriorityLevel level;
 };
 
 struct PedChannelState {
@@ -200,9 +219,59 @@ public:
         return maxSkipped;
     }
 
-    void beginWalkPhase() {
+    PedestrianPrioritySummary evaluatePriority(uint32_t nowMs,
+                                               const TrafficConfig::ConflictMatrixConfig& cm,
+                                               uint32_t pedUrgencyWaitMs = TrafficConfig::DEFAULT_PED_URGENCY_WAIT_MS) const {
+        PedestrianPrioritySummary s{};
+        s.ped1Pending      = channels_[0].requestLatched;
+        s.ped2Pending      = channels_[1].requestLatched;
+        s.anyPending       = s.ped1Pending || s.ped2Pending;
+        s.ped1WaitMs       = s.ped1Pending ? (nowMs - channels_[0].requestLatchedMs) : 0;
+        s.ped2WaitMs       = s.ped2Pending ? (nowMs - channels_[1].requestLatchedMs) : 0;
+        s.maxWaitMs        = (s.ped1WaitMs > s.ped2WaitMs) ? s.ped1WaitMs : s.ped2WaitMs;
+        s.maxSkippedCycles = getMaxSkippedCycles();
+        s.canServeTogether = (!cm.conflicts[3][4] && !cm.conflicts[4][3]);
+        s.urgencyActive    = s.anyPending && (s.maxWaitMs >= pedUrgencyWaitMs || s.maxSkippedCycles >= 1);
+        if (!s.anyPending) {
+            s.level = PedestrianPriorityLevel::NONE;
+        } else if (s.urgencyActive) {
+            s.level = PedestrianPriorityLevel::MAX_WAIT_URGENT;
+        } else {
+            s.level = PedestrianPriorityLevel::ELEVATED;
+        }
+        return s;
+    }
+
+    static const char* priorityLevelToString(PedestrianPriorityLevel lvl) {
+        switch (lvl) {
+            case PedestrianPriorityLevel::MAX_WAIT_URGENT: return "URGENT";
+            case PedestrianPriorityLevel::ELEVATED:        return "ELEVATED";
+            case PedestrianPriorityLevel::NONE:
+            default:                                       return "NONE";
+        }
+    }
+
+    void beginWalkPhase(const TrafficConfig::ConflictMatrixConfig& cm = TrafficConfig::DEFAULT_CONFLICT_MATRIX) {
         inClearanceInterval_ = false;
-        const bool anySpecific = channels_[0].requestLatched || channels_[1].requestLatched;
+        const bool p1 = channels_[0].requestLatched;
+        const bool p2 = channels_[1].requestLatched;
+        const bool compatible = (!cm.conflicts[3][4] && !cm.conflicts[4][3]);
+
+        if (p1 && p2 && !compatible) {
+            // Serve the older / higher-skipped crossing independently; keep the other latched
+            const bool serveP1 = (channels_[0].skippedCycles > channels_[1].skippedCycles) ||
+                                 (channels_[0].skippedCycles == channels_[1].skippedCycles &&
+                                  channels_[0].requestLatchedMs <= channels_[1].requestLatchedMs);
+            channels_[0].servingWalk = serveP1;
+            channels_[0].aspect      = serveP1 ? PedSignalAspect::WALK : PedSignalAspect::DONT_WALK;
+            channels_[1].servingWalk = !serveP1;
+            channels_[1].aspect      = !serveP1 ? PedSignalAspect::WALK : PedSignalAspect::DONT_WALK;
+            if (serveP1) channels_[0].skippedCycles = 0;
+            else channels_[1].skippedCycles = 0;
+            return;
+        }
+
+        const bool anySpecific = p1 || p2;
         for (uint8_t i = 0; i < TrafficConfig::PED_BUTTON_COUNT; ++i) {
             if (channels_[i].requestLatched || !anySpecific) {
                 channels_[i].servingWalk   = true;

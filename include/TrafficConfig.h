@@ -105,7 +105,7 @@ constexpr RhtMovementDescriptor RHT_MOVEMENT_DESCRIPTORS[static_cast<size_t>(Mov
         MovementId::PED_CROSSING_2,
         "PED_CROSSING_2",
         "Side Road T-Stem Crosswalk (East-West across T-stem carriageway)",
-        "Pedestrian Group 2 crossing across Side Road T-stem approach (Walk=GPIO17, DW=GPIO16, Btn=GPIO4)",
+        "Pedestrian Group 2 crossing across Side Road T-stem approach (Walk=GPIO16, DW=GPIO17, Btn=GPIO4)",
         false,
         false
     }
@@ -120,8 +120,8 @@ constexpr RhtMovementDescriptor RHT_MOVEMENT_DESCRIPTORS[static_cast<size_t>(Mov
 //
 // Vehicle Traffic Lights (3 x RYG Modules):
 //   - Main road     : Red = GPIO 27, Yellow = GPIO 26, Green = GPIO 25
-//   - Side road     : Red = GPIO 13, Yellow = GPIO 12, Green = GPIO 14
-//   - Turn movement : Red = GPIO 23, Yellow = GPIO 22, Green = GPIO 21
+//   - Side road     : Red = GPIO 14, Yellow = GPIO 12, Green = GPIO 13
+//   - Turn movement : Red = GPIO 22, Yellow = GPIO 23, Green = GPIO 21
 //
 // Vehicle Detection (6 x IR Sensors, 2 per road):
 //   - Main road     : Sensor 1 = GPIO 33, Sensor 2 = GPIO 34
@@ -130,7 +130,7 @@ constexpr RhtMovementDescriptor RHT_MOVEMENT_DESCRIPTORS[static_cast<size_t>(Mov
 //
 // Pedestrian Signals & Buttons:
 //   - Pedestrian 1  : Walk = GPIO 19, Don't Walk = GPIO 18, Button 1 = GPIO 32
-//   - Pedestrian 2  : Walk = GPIO 17, Don't Walk = GPIO 16, Button 2 = GPIO 4
+//   - Pedestrian 2  : Walk = GPIO 16, Don't Walk = GPIO 17, Button 2 = GPIO 4
 
 // Vehicle Signal Group 1: Main Road (RYG)
 constexpr uint8_t PIN_MAIN_RED                    = 27; // OUTPUT (Locked: Main Road Red)
@@ -325,6 +325,9 @@ constexpr bool VEHICLE_DRIVER_VERIFIED            = true;
 constexpr bool VEHICLE_HIGH_SIDE_DRIVER_VERIFIED  = true;
 constexpr bool PED_ULN2003A_DRIVER_VERIFIED       = true;
 constexpr bool PHYSICAL_IR_VALIDATED              = true;
+// RHT Protected Turn Geometry Verified for production deployment:
+// Bidirectional 5x5 RHT conflict matrix verified in DEFAULT_CONFLICT_MATRIX
+// and TrafficPhaseManager::applyConflictMatrix().
 constexpr bool PROTECTED_TURN_GEOMETRY_VERIFIED   = true;
 #endif
 
@@ -344,6 +347,9 @@ constexpr uint32_t IR_STABILITY_MS       = 100;   // 100 ms IR sensor stability 
 constexpr uint32_t MAX_INPUT_STUCK_MS    = 30000; // 30 s stuck-sensor/button fault timeout
 constexpr uint32_t IR_CHATTER_WINDOW_MS  = 1000;  // 1 s window for disconnected/noisy chatter detection
 constexpr uint8_t  IR_MAX_TRANSITIONS_PER_WINDOW = 12; // >12 transitions/sec indicates floating/chattering input
+constexpr uint32_t PASSAGE_BOTH_CONGESTION_MS    = 5000;  // Simultaneous front+rear >=5.0s = congestion (allows slow vehicles up to 5s overlap)
+constexpr uint32_t PASSAGE_SEQUENCE_TIMEOUT_MS   = 15000; // Incomplete zone occupancy timeout (15s)
+constexpr uint32_t PASSAGE_ROLLING_WINDOW_MS     = 60000; // 60s rolling window for passage count & arrival rate
 
 // ============================================================================
 // BENCH-TEST DEMONSTRATION PHASE TIMINGS (MILLISECONDS)
@@ -389,10 +395,10 @@ constexpr uint32_t PROTOTYPE_SIDE_MIN_GREEN_MS = 20000; // 20 s
 constexpr uint32_t PROTOTYPE_SIDE_MAX_GREEN_MS = 25000; // 25 s
 constexpr uint32_t PROTOTYPE_SIDE_CLEAR_GAP_MS = 2000;  // 2 s
 constexpr uint32_t PROTOTYPE_SIDE_YELLOW_MS    = 3000;  // 3 s
-constexpr uint32_t PROTOTYPE_TURN_MIN_GREEN_MS = 2000;  // 2 s
-constexpr uint32_t PROTOTYPE_TURN_MAX_GREEN_MS = 6000;  // 6 s
-constexpr uint32_t PROTOTYPE_TURN_CLEAR_GAP_MS = 2000;  // 2 s
-constexpr uint32_t PROTOTYPE_TURN_YELLOW_MS    = 2000;  // 2 s
+constexpr uint32_t PROTOTYPE_TURN_MIN_GREEN_MS = 10000; // 10 s
+constexpr uint32_t PROTOTYPE_TURN_MAX_GREEN_MS = 20000; // 20 s
+constexpr uint32_t PROTOTYPE_TURN_CLEAR_GAP_MS = 3000;  // 3 s
+constexpr uint32_t PROTOTYPE_TURN_YELLOW_MS    = 3000;  // 3 s
 constexpr uint32_t PROTOTYPE_PED_WALK_MS       = 5000;  // 5 s
 constexpr uint32_t PROTOTYPE_PED_CLEARANCE_MS  = 2000;  // 2 s
 
@@ -400,11 +406,19 @@ constexpr uint32_t PROTOTYPE_PED_CLEARANCE_MS  = 2000;  // 2 s
 constexpr uint32_t MIN_ALLOWED_INTERVAL_MS = 500;
 constexpr uint32_t MAX_ALLOWED_INTERVAL_MS = 120000;
 
-// Adaptive Demand Scoring Parameters
-constexpr uint32_t DEFAULT_WAIT_TIME_WEIGHT_MS   = 2000; // Every 2 s waiting adds +1 demand score
-constexpr uint8_t  DEFAULT_ACTIVE_SENSOR_WEIGHT  = 3;    // Each active sensor on approach adds +3 demand score
-constexpr uint8_t  DEFAULT_STARVATION_SKIP_LIMIT = 2;    // After 2 skipped cycles, approach receives starvation boost
-constexpr uint8_t  DEFAULT_STARVATION_BOOST      = 25;   // Score boost applied when starvation threshold is reached
+// Adaptive Demand Scoring & Normalized Priority Weights
+constexpr uint32_t DEFAULT_WAIT_TIME_WEIGHT_MS   = 2000;  // Legacy ms per +1 wait score
+constexpr uint8_t  DEFAULT_ACTIVE_SENSOR_WEIGHT  = 3;     // Legacy weight per active sensor
+constexpr uint8_t  DEFAULT_STARVATION_SKIP_LIMIT = 2;     // Skipped cycles before starvation boost
+constexpr uint8_t  DEFAULT_STARVATION_BOOST      = 25;    // Legacy starvation boost
+constexpr uint8_t  DEFAULT_WEIGHT_DEMAND_PCT     = 30;    // 0.30 * Demand Score
+constexpr uint8_t  DEFAULT_WEIGHT_WAITING_PCT    = 30;    // 0.30 * Waiting Score
+constexpr uint8_t  DEFAULT_WEIGHT_FAIRNESS_PCT   = 20;    // 0.20 * Fairness Score
+constexpr uint8_t  DEFAULT_WEIGHT_CONTINUOUS_PCT = 20;    // 0.20 * Continuous Demand Score
+constexpr uint32_t DEFAULT_URGENCY_WAIT_MS       = 30000; // 30s waiting urgency increase
+constexpr uint32_t DEFAULT_MAX_WAIT_LIMIT_MS     = 45000; // 45s maximum-wait protection
+constexpr uint32_t DEFAULT_PED_URGENCY_WAIT_MS   = 20000; // 20s pedestrian max-wait protection
+constexpr uint32_t DEFAULT_CONTINUOUS_SAT_MS     = 15000; // 15s continuous presence -> 100 score
 
 // Aggregate TimingConfig structure.
 // First 9 fields match v1.1.0-hardware-ready in exact order so legacy 9-field
@@ -514,6 +528,15 @@ struct DemandConfig {
     uint8_t  starvationSkipLimit;       // Max skipped cycles before starvation priority boost
     uint8_t  starvationBoostScore;      // Priority score boost when starved
     uint8_t  highDemandSensorThreshold; // Number of active sensors on approach to indicate multi-sensor queue
+    // Normalized 0..100 Priority Model Weights (sum = 100%)
+    uint8_t  weightDemandPct;           // Default 30%
+    uint8_t  weightWaitingPct;          // Default 30%
+    uint8_t  weightFairnessPct;         // Default 20%
+    uint8_t  weightContinuousPct;       // Default 20%
+    uint32_t urgencyWaitThresholdMs;    // Default 30,000 ms (urgency increase)
+    uint32_t maxWaitLimitMs;            // Default 45,000 ms (maximum-wait protection)
+    uint32_t pedUrgencyWaitMs;          // Default 20,000 ms (pedestrian max-wait protection)
+    uint32_t continuousDemandSatMs;     // Default 15,000 ms (continuous presence saturation)
 };
 
 constexpr DemandConfig DEFAULT_DEMAND_CONFIG = {
@@ -521,7 +544,15 @@ constexpr DemandConfig DEFAULT_DEMAND_CONFIG = {
     DEFAULT_ACTIVE_SENSOR_WEIGHT,
     DEFAULT_STARVATION_SKIP_LIMIT,
     DEFAULT_STARVATION_BOOST,
-    2
+    2,
+    DEFAULT_WEIGHT_DEMAND_PCT,
+    DEFAULT_WEIGHT_WAITING_PCT,
+    DEFAULT_WEIGHT_FAIRNESS_PCT,
+    DEFAULT_WEIGHT_CONTINUOUS_PCT,
+    DEFAULT_URGENCY_WAIT_MS,
+    DEFAULT_MAX_WAIT_LIMIT_MS,
+    DEFAULT_PED_URGENCY_WAIT_MS,
+    DEFAULT_CONTINUOUS_SAT_MS
 };
 
 // Explicit Movement Conflict Matrix Configuration

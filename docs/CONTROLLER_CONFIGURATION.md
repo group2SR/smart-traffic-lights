@@ -107,7 +107,7 @@ The controller includes an interactive, browser-based monitoring and commissioni
 - **Features Supported:**
   1. **T-Junction Live Visualization:** Real-time top-down SVG rendering with Right-Hand Traffic lane geometry, active signal lamps, and 6 IR sensor indicators.
   2. **Vehicle Signal Status Panel:** Full status indicators for Main Road (27/26/25), Side Road (13/12/14), and Protected Turn (23/22/21) with clear `DISABLED / NOT COMMISSIONED` status badge.
-  3. **Dual Pedestrian Crossings:** Split monitoring for Pedestrian Crossing 1 (Walk 19, DW 18, Button 32) and Crossing 2 (Walk 17, DW 16, Button 4).
+  3. **Dual Pedestrian Crossings:** Split monitoring for Pedestrian Crossing 1 (Walk 19, DW 18, Button 32) and Crossing 2 (Walk 16, DW 17, Button 4).
   4. **Six IR Vehicle Detection Sensors:** Dedicated 6-channel status grid displaying GPIOs (33, 34, 35, 36, 39, 15), live raw pin readings, stable detection states, detection/release counts, cycle observed flags, stuck/chatter fault indicators, and per-channel commissioning toggles.
   5. **Operating Mode Management:** Selection between `MODE FIXED`, `MODE ADAPTIVE` (safety-gated until all 6 IR channels are commissioned), and `MODE MANUAL` (with phase step advancement).
   6. **Live Remaining Green Countdown:** Real-time progress bar and countdown timer synchronized with firmware elapsed time and configured phase limits.

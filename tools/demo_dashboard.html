@@ -193,12 +193,14 @@
       animation: pulseDot 1s infinite;
     }
 
-    .badge[data-status="CONNECTING"] {
+    .badge[data-status="CONNECTING"],
+    .badge[data-status="PORT_OPENED"] {
       background-color: var(--status-warning-bg);
       color: var(--status-warning);
       border-color: var(--status-warning-border);
     }
-    .badge[data-status="CONNECTING"] .badge-dot {
+    .badge[data-status="CONNECTING"] .badge-dot,
+    .badge[data-status="PORT_OPENED"] .badge-dot {
       background-color: var(--status-warning);
       animation: pulseDot 0.8s infinite;
     }
@@ -235,6 +237,7 @@
     }
 
     .badge[data-status="STALE"],
+    .badge[data-status="TELEMETRY_STALE"],
     .badge[data-status="TELEMETRY STALE"],
     .badge[data-status="STALE TELEMETRY"] {
       background-color: var(--status-warning-bg);
@@ -242,6 +245,7 @@
       border-color: var(--status-warning-border);
     }
     .badge[data-status="STALE"] .badge-dot,
+    .badge[data-status="TELEMETRY_STALE"] .badge-dot,
     .badge[data-status="TELEMETRY STALE"] .badge-dot,
     .badge[data-status="STALE TELEMETRY"] .badge-dot {
       background-color: var(--status-warning);
@@ -269,12 +273,14 @@
     }
 
     .badge[data-status="SERIAL LOST"],
+    .badge[data-status="COMMUNICATION_ERROR"],
     .badge[data-status="ERROR"] {
       background-color: var(--status-error-bg);
       color: var(--status-error);
       border-color: var(--status-error-border);
     }
     .badge[data-status="SERIAL LOST"] .badge-dot,
+    .badge[data-status="COMMUNICATION_ERROR"] .badge-dot,
     .badge[data-status="ERROR"] .badge-dot {
       background-color: var(--status-error);
     }
@@ -1950,6 +1956,40 @@
           <div class="metric-sub" id="metricFaultMaskSub">Fault Mask: 0x0000 | Fault: NONE</div>
         </article>
       </div>
+
+      <!-- Adaptive Control & Priority Telemetry Strip -->
+      <div class="card" style="margin-top:0.85rem; padding:0.75rem 1rem;" aria-label="Adaptive Control and Priority Telemetry">
+        <div style="display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:0.75rem; font-size:0.78rem;">
+          <div>
+            <strong>Normalized Priority (0–100):</strong>
+            Main <span id="adaptScoreMain" class="badge">0</span>
+            Side <span id="adaptScoreSide" class="badge">0</span>
+            Turn <span id="adaptScoreTurn" class="badge">0</span>
+          </div>
+          <div>
+            <strong>Waits:</strong>
+            Main <span id="adaptWaitMain">0 ms</span> |
+            Side <span id="adaptWaitSide">0 ms</span> |
+            Turn <span id="adaptWaitTurn">0 ms</span>
+          </div>
+          <div>
+            <strong>Ped Priority:</strong>
+            <span id="adaptPedPriority" class="badge">NONE</span>
+            (<span id="adaptPedWaits">P1: 0 ms | P2: 0 ms</span>)
+          </div>
+          <div>
+            <strong>Next:</strong> <span id="adaptNextTarget">N/A</span> |
+            <strong>Reason:</strong> <span id="adaptSelectionReason">N/A</span> |
+            <strong>Alloc:</strong> <span id="adaptAllocGreen">--</span> |
+            <strong>Sensors:</strong> <span id="adaptSensorHealth">N/A</span>
+          </div>
+          <div style="width:100%; border-top:1px solid var(--border-sep); padding-top:0.4rem; display:flex; flex-wrap:wrap; gap:1rem; font-size:0.75rem; color:var(--text-secondary);">
+            <span><strong>Main Passages:</strong> <span id="passageMainText">0 (0/m)</span></span>
+            <span><strong>Side Passages:</strong> <span id="passageSideText">0 (0/m)</span></span>
+            <span><strong>Turn Passages:</strong> <span id="passageTurnText">0 (0/m)</span></span>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- MAIN WORKSPACE GRID -->
@@ -2592,9 +2632,9 @@
                     </tr>
                     <tr>
                       <td><strong>Protected Turn</strong></td>
-                      <td id="timingTurnMin">2,000 ms</td>
-                      <td id="timingTurnMax">6,000 ms</td>
-                      <td id="timingTurnYel">2,000 ms</td>
+                      <td id="timingTurnMin">10,000 ms</td>
+                      <td id="timingTurnMax">20,000 ms</td>
+                      <td id="timingTurnYel">3,000 ms</td>
                       <td>--</td>
                     </tr>
                     <tr>
@@ -2676,17 +2716,17 @@
                     <span style="font-size:0.75rem; font-weight:700; color:var(--teal-primary);">Protected Turn (TIMING TURN)</span>
                     <div style="display:flex; gap:0.35rem; align-items:center;">
                       <label style="font-size:0.7rem; color:var(--text-secondary); width:50px;">Min G:</label>
-                      <input id="inputTimingTurnMin" type="number" min="500" max="120000" step="500" value="2000" style="width:100%; font-size:0.75rem; padding:0.2rem 0.4rem; border:1px solid var(--border-sep); border-radius:4px; font-family:var(--font-mono);" />
+                      <input id="inputTimingTurnMin" type="number" min="500" max="120000" step="500" value="10000" style="width:100%; font-size:0.75rem; padding:0.2rem 0.4rem; border:1px solid var(--border-sep); border-radius:4px; font-family:var(--font-mono);" />
                       <span style="font-size:0.7rem; color:var(--text-secondary);">ms</span>
                     </div>
                     <div style="display:flex; gap:0.35rem; align-items:center;">
                       <label style="font-size:0.7rem; color:var(--text-secondary); width:50px;">Max G:</label>
-                      <input id="inputTimingTurnMax" type="number" min="500" max="120000" step="500" value="6000" style="width:100%; font-size:0.75rem; padding:0.2rem 0.4rem; border:1px solid var(--border-sep); border-radius:4px; font-family:var(--font-mono);" />
+                      <input id="inputTimingTurnMax" type="number" min="500" max="120000" step="500" value="20000" style="width:100%; font-size:0.75rem; padding:0.2rem 0.4rem; border:1px solid var(--border-sep); border-radius:4px; font-family:var(--font-mono);" />
                       <span style="font-size:0.7rem; color:var(--text-secondary);">ms</span>
                     </div>
                     <div style="display:flex; gap:0.35rem; align-items:center;">
                       <label style="font-size:0.7rem; color:var(--text-secondary); width:50px;">Yellow:</label>
-                      <input id="inputTimingTurnYel" type="number" min="1000" max="10000" step="500" value="2000" style="width:100%; font-size:0.75rem; padding:0.2rem 0.4rem; border:1px solid var(--border-sep); border-radius:4px; font-family:var(--font-mono);" />
+                      <input id="inputTimingTurnYel" type="number" min="1000" max="10000" step="500" value="3000" style="width:100%; font-size:0.75rem; padding:0.2rem 0.4rem; border:1px solid var(--border-sep); border-radius:4px; font-family:var(--font-mono);" />
                       <span style="font-size:0.7rem; color:var(--text-secondary);">ms</span>
                     </div>
                     <button id="btnApplyTimingTurn" type="button" class="btn btn-secondary btn-sm" style="margin-top:0.2rem;" disabled>
@@ -3396,10 +3436,27 @@
       let readLoopActive = false;
       let isDisconnecting = false;
 
-      // Connection state: DISCONNECTED | CONNECTING | CONNECTED | RECONNECTING | SERIAL LOST | STALE TELEMETRY | CONTROLLER FAULT | ERROR
-      let connectionStatus = "DISCONNECTED";
+      // Canonical Connection & Telemetry State Model (DEF-03 / DEF-04)
+      const CONN_STATE = Object.freeze({
+        DISCONNECTED: "DISCONNECTED",
+        REQUESTING_PORT: "REQUESTING_PORT",
+        CONNECTING: "CONNECTING",
+        PORT_OPENED: "PORT_OPENED",
+        CONNECTED: "CONNECTED",
+        RECEIVING_DATA: "RECEIVING_DATA",
+        TELEMETRY_STALE: "TELEMETRY_STALE",
+        CONTROLLER_FAULT: "CONTROLLER FAULT",
+        COMMUNICATION_ERROR: "COMMUNICATION_ERROR",
+        DISCONNECTING: "DISCONNECTING"
+      });
+      const HANDSHAKE_TIMEOUT_MS = 4000;
+
+      let connectionStatus = CONN_STATE.DISCONNECTED;
       let selectedPortLabel = "Not Selected";
+      let lastSelectedPortInfo = null;
       let isManualDisconnect = false;
+      let isHandshakeInProgress = false;
+      let handshakeTimerId = null;
       let autoReconnectAttempts = 0;
       const MAX_AUTO_RECONNECT_ATTEMPTS = 5;
       let autoReconnectTimerId = null;
@@ -3467,10 +3524,10 @@
         sideMaxGreenMs: 25000,
         sideClearGapMs: 2000,
         sideYellowMs: 3000,
-        turnMinGreenMs: 2000,
-        turnMaxGreenMs: 6000,
-        turnClearGapMs: 2000,
-        turnYellowMs: 2000,
+        turnMinGreenMs: 10000,
+        turnMaxGreenMs: 20000,
+        turnClearGapMs: 3000,
+        turnYellowMs: 3000,
         pedWalkMs: 5000,
         pedClearanceMs: 2000
       };
@@ -3544,6 +3601,23 @@
         metricIrValidSub: document.getElementById("metricIrValidSub"),
         metricSerialHealth: document.getElementById("metricSerialHealth"),
         metricFaultMaskSub: document.getElementById("metricFaultMaskSub"),
+
+        // Adaptive Priority Telemetry
+        adaptScoreMain: document.getElementById("adaptScoreMain"),
+        adaptScoreSide: document.getElementById("adaptScoreSide"),
+        adaptScoreTurn: document.getElementById("adaptScoreTurn"),
+        adaptWaitMain: document.getElementById("adaptWaitMain"),
+        adaptWaitSide: document.getElementById("adaptWaitSide"),
+        adaptWaitTurn: document.getElementById("adaptWaitTurn"),
+        adaptPedPriority: document.getElementById("adaptPedPriority"),
+        adaptPedWaits: document.getElementById("adaptPedWaits"),
+        adaptNextTarget: document.getElementById("adaptNextTarget"),
+        adaptSelectionReason: document.getElementById("adaptSelectionReason"),
+        adaptAllocGreen: document.getElementById("adaptAllocGreen"),
+        adaptSensorHealth: document.getElementById("adaptSensorHealth"),
+        passageMainText: document.getElementById("passageMainText"),
+        passageSideText: document.getElementById("passageSideText"),
+        passageTurnText: document.getElementById("passageTurnText"),
 
         // SVG Junction
         junctionStateLabel: document.getElementById("junctionStateLabel"),
@@ -4648,7 +4722,7 @@
         updateSingleLamp([el.svgPed1Walk, el.svgPedWalk], el.dotPed1Walk, el.pillPed1Walk, p1CmdW, "active-green", "CMD: ON", el.gpioPed1Walk, p1ElecW);
         updateSingleLamp([el.svgPed1DontWalk, el.svgPedDontWalk], el.dotPed1DontWalk, el.pillPed1DontWalk, p1CmdDw, "active-red", "CMD: ON", el.gpioPed1DontWalk, p1ElecDw);
 
-        // PED2: Walk 17, DW 16, Button 4
+        // PED2: Walk 16, DW 17, Button 4
         const p2CmdW = (cmd.ped2Walk === 1);
         const p2ElecW = (elec.ped2Walk === 1);
         const p2CmdDw = (cmd.ped2DontWalk === 1);
@@ -4765,7 +4839,7 @@
       }
 
       function updateCountdownTick() {
-        if (!lastValidTelemetry || (connectionStatus !== "CONNECTED" && connectionStatus !== "RECEIVING_DATA")) {
+        if (!lastValidTelemetry || (connectionStatus !== CONN_STATE.CONNECTED && connectionStatus !== CONN_STATE.RECEIVING_DATA)) {
           el.countdownTimerValue.textContent = "--.- s";
           el.countdownBar.style.width = "0%";
           el.svgActiveCountdownText.textContent = "Countdown: Idle";
@@ -4797,11 +4871,21 @@
         } else if (t.currentFsmState === "SIDE_YELLOW") {
           targetDurationMs = activeTimingConfig.sideYellowMs || 3000;
           roadName = "SIDE ROAD (CLEARANCE)";
+        } else if (t.currentFsmState === "TURN_GREEN") {
+          const tMin = activeTimingConfig.turnMinGreenMs || 10000;
+          const tMax = activeTimingConfig.turnMaxGreenMs || 20000;
+          targetDurationMs = (clientElapsedMs > tMin && tMax > tMin) ? tMax : tMin;
+          roadName = t.protectedTurnCommissioned
+            ? ((clientElapsedMs > tMin && tMax > tMin) ? "PROTECTED TURN (EXTENDING TO MAX)" : "PROTECTED TURN (GO)")
+            : "PROTECTED TURN (UNCOMMISSIONED)";
+        } else if (t.currentFsmState === "TURN_YELLOW") {
+          targetDurationMs = activeTimingConfig.turnYellowMs || 3000;
+          roadName = "PROTECTED TURN (CLEARANCE)";
         } else if (t.currentFsmState === "PED_WALK") {
           targetDurationMs = activeTimingConfig.pedWalkMs || 5000;
           roadName = "PEDESTRIAN WALK";
         } else if (t.currentFsmState === "ALL_GREEN_DIAG") {
-          targetDurationMs = 10000;
+          targetDurationMs = (t.allGreenDurationMs && t.allGreenDurationMs > 0) ? t.allGreenDurationMs : 0;
           roadName = "ALL VEHICLES GREEN (HARDWARE DIAGNOSTIC TEST)";
         }
 
@@ -4835,18 +4919,24 @@
           if (el.ped2CountdownLabel) el.ped2CountdownLabel.textContent = t.ped2Demand ? "Called (Awaiting Walk)" : "Clearance: Idle";
         }
 
-        // Live ALL-GREEN 10s diagnostic countdown & progress bar
+        // Live ALL-GREEN diagnostic countdown & progress bar (driven by firmware duration)
         if (t.currentFsmState === "ALL_GREEN_DIAG") {
           if (el.allGreenProgressWidget) el.allGreenProgressWidget.style.display = "block";
-          const remainingMs = Math.max(0, 10000 - clientElapsedMs);
-          const remainingSec = (remainingMs / 1000).toFixed(1);
-          if (el.allGreenCountdownLabel) el.allGreenCountdownLabel.textContent = `${remainingSec} s remaining`;
-          if (el.allGreenProgressBar) el.allGreenProgressBar.style.width = `${Math.min(100, Math.max(0, (remainingMs / 10000) * 100))}%`;
-          if (el.allGreenBadge) {
-            el.allGreenBadge.textContent = `RUNNING (${remainingSec}s)`;
-            el.allGreenBadge.style.background = "#FEF3C7";
-            el.allGreenBadge.style.color = "#92400E";
-            el.allGreenBadge.style.borderColor = "#FCD34D";
+          const diagDur = (t.allGreenDurationMs && t.allGreenDurationMs > 0) ? t.allGreenDurationMs : 0;
+          if (diagDur > 0) {
+            const remainingMs = Math.max(0, diagDur - clientElapsedMs);
+            const remainingSec = (remainingMs / 1000).toFixed(1);
+            if (el.allGreenCountdownLabel) el.allGreenCountdownLabel.textContent = `${remainingSec} s remaining`;
+            if (el.allGreenProgressBar) el.allGreenProgressBar.style.width = `${Math.min(100, Math.max(0, (remainingMs / diagDur) * 100))}%`;
+            if (el.allGreenBadge) {
+              el.allGreenBadge.textContent = `RUNNING (${remainingSec}s)`;
+              el.allGreenBadge.style.background = "#FEF3C7";
+              el.allGreenBadge.style.color = "#92400E";
+              el.allGreenBadge.style.borderColor = "#FCD34D";
+            }
+          } else {
+            if (el.allGreenCountdownLabel) el.allGreenCountdownLabel.textContent = "--.- s (Awaiting duration)";
+            if (el.allGreenProgressBar) el.allGreenProgressBar.style.width = "0%";
           }
         }
       }
@@ -4986,24 +5076,29 @@
         el.connBadgeText.textContent = newStatus;
         el.metricSerialHealth.textContent = newStatus;
 
-        const isConnected = (newStatus === "CONNECTED" || newStatus === "RECEIVING_DATA" || newStatus === "TELEMETRY STALE" || newStatus === "STALE TELEMETRY" || newStatus === "CONTROLLER FAULT");
-        const isConnecting = (newStatus === "CONNECTING" || newStatus.startsWith("RECONNECTING"));
-        const isDisconnected = (newStatus === "DISCONNECTED" || newStatus === "FAILED" || newStatus === "CLOSED" || newStatus === "NO_PORT");
+        const isConnected = (newStatus === CONN_STATE.CONNECTED || newStatus === CONN_STATE.RECEIVING_DATA || newStatus === CONN_STATE.TELEMETRY_STALE || newStatus === CONN_STATE.CONTROLLER_FAULT);
+        const isConnecting = (newStatus === CONN_STATE.CONNECTING || newStatus === CONN_STATE.PORT_OPENED || newStatus === CONN_STATE.REQUESTING_PORT || newStatus.startsWith("RECONNECTING"));
+        const isDisconnected = (newStatus === CONN_STATE.DISCONNECTED || newStatus === CONN_STATE.COMMUNICATION_ERROR || newStatus === "FAILED" || newStatus === "CLOSED" || newStatus === "NO_PORT" || newStatus === "ERROR");
 
         el.btnConnect.disabled = isConnected || isConnecting || !("serial" in navigator);
         el.btnDisconnect.disabled = !isConnected && !isConnecting;
 
-        if (newStatus === "TELEMETRY STALE" || newStatus === "STALE TELEMETRY") {
+        if (newStatus === CONN_STATE.TELEMETRY_STALE) {
           el.staleAlertBanner.style.display = "flex";
           el.staleAlertBanner.className = "alert-banner alert-banner-warning";
           el.staleAlertText.textContent = lastValidTelemetry
-            ? "STALE TELEMETRY: Authoritative status stopped arriving from ESP32. Displayed indicators reflect the last verified snapshot."
-            : "NO STATUS RECEIVED: Serial port opened, but no STATUS block received yet. Verify COM5 is running the Smart Traffic Lights firmware.";
+            ? "TELEMETRY_STALE: Authoritative status stopped arriving from ESP32. Displayed indicators reflect the last verified snapshot."
+            : "NO STATUS RECEIVED: Serial port opened, but no STATUS block received yet. Verify ESP32 is running Smart Traffic Lights firmware.";
           el.metricCards.forEach(c => c.classList.add("is-stale"));
-        } else if (newStatus === "CONTROLLER FAULT") {
+        } else if (newStatus === CONN_STATE.CONTROLLER_FAULT) {
           el.staleAlertBanner.style.display = "flex";
           el.staleAlertBanner.className = "alert-banner alert-banner-error";
           el.staleAlertText.textContent = `CONTROLLER FAULT: Safe state entered. Reason: ${(lastValidTelemetry && lastValidTelemetry.faultReason) || "FAULT_SAFE lock"}. Logical outputs safe.`;
+          el.metricCards.forEach(c => c.classList.add("is-stale"));
+        } else if (newStatus === CONN_STATE.COMMUNICATION_ERROR) {
+          el.staleAlertBanner.style.display = "flex";
+          el.staleAlertBanner.className = "alert-banner alert-banner-error";
+          el.staleAlertText.textContent = `COMMUNICATION_ERROR: ${portDetail || "ESP32 serial communication failed or timed out."}`;
           el.metricCards.forEach(c => c.classList.add("is-stale"));
         } else if (newStatus.startsWith("RECONNECTING")) {
           el.staleAlertBanner.style.display = "flex";
@@ -5025,13 +5120,13 @@
         if (!t) return;
 
         // Check if controller is in FAULT_SAFE or has active fault
-        if (connectionStatus === "CONNECTED" && (t.currentFsmState === "FAULT_SAFE" || (t.activeFaultMask && t.activeFaultMask > 0))) {
-          setConnectionStatus("CONTROLLER FAULT");
-        } else if (connectionStatus === "CONTROLLER FAULT" && t.currentFsmState !== "FAULT_SAFE" && (!t.activeFaultMask || t.activeFaultMask === 0)) {
-          setConnectionStatus("CONNECTED");
+        if ((connectionStatus === CONN_STATE.CONNECTED || connectionStatus === CONN_STATE.RECEIVING_DATA) && (t.currentFsmState === "FAULT_SAFE" || (t.activeFaultMask && t.activeFaultMask > 0))) {
+          setConnectionStatus(CONN_STATE.CONTROLLER_FAULT);
+        } else if (connectionStatus === CONN_STATE.CONTROLLER_FAULT && t.currentFsmState !== "FAULT_SAFE" && (!t.activeFaultMask || t.activeFaultMask === 0)) {
+          setConnectionStatus(CONN_STATE.CONNECTED);
         }
 
-        const isStale = (connectionStatus === "TELEMETRY STALE" || connectionStatus === "STALE TELEMETRY");
+        const isStale = (connectionStatus === CONN_STATE.TELEMETRY_STALE);
         const staleSuffix = isStale ? " [STALE]" : "";
 
         // Header Badges
@@ -5094,9 +5189,18 @@
         } else if (t.currentFsmState === "SIDE_YELLOW") {
           activeMovementText = "SIDE ROAD YELLOW (CHANGE INTERVAL)";
           activeRoadDesc = "Side Road (Cross-Street)";
+        } else if (t.currentFsmState === "TURN_GREEN") {
+          activeMovementText = t.protectedTurnCommissioned ? "PROTECTED TURN GREEN (GO)" : "PROTECTED TURN (UNCOMMISSIONED)";
+          activeRoadDesc = "Protected Turn";
+        } else if (t.currentFsmState === "TURN_YELLOW") {
+          activeMovementText = "PROTECTED TURN YELLOW (CLEARANCE)";
+          activeRoadDesc = "Protected Turn";
         } else if (t.currentFsmState === "PED_WALK") {
           activeMovementText = "PEDESTRIAN WALK (ALL VEHICLES STOP)";
           activeRoadDesc = "Pedestrian Crosswalks";
+        } else if (t.currentFsmState === "ALL_GREEN_DIAG") {
+          activeMovementText = "ALL-GREEN HARDWARE DIAGNOSTIC";
+          activeRoadDesc = "Bench Diagnostic";
         } else if (t.currentFsmState === "STARTUP_SAFE") {
           activeMovementText = "STARTUP SAFE (PRE-CLEARANCE)";
           activeRoadDesc = "Startup Safe Pre-Clearance";
@@ -5147,12 +5251,12 @@
 
         el.metricStateElapsed.textContent = t.stateElapsedMs !== null ? `${t.stateElapsedMs} ms` : "N/A";
 
-        if (t.currentFsmState === "SIDE_GREEN" && t.sideGapState !== null) {
+        if ((t.currentFsmState === "SIDE_GREEN" || t.currentFsmState === "TURN_GREEN") && t.sideGapState !== null) {
           el.metricSideGap.textContent = `${t.sideGapState} (${t.sideGapMs} ms)`;
-          el.metricSideGapSub.textContent = "2000 ms clear-gap threshold";
+          el.metricSideGapSub.textContent = "Clear-gap supervision active";
         } else {
           el.metricSideGap.textContent = "N/A";
-          el.metricSideGapSub.textContent = "Active only during SIDE_GREEN";
+          el.metricSideGapSub.textContent = "Active during SIDE_GREEN / TURN_GREEN";
         }
 
         el.metricSideDemand.textContent = t.sideDemandStatus || "N/A";
@@ -5165,6 +5269,27 @@
         el.metricIrValidSub.textContent = `Mask: 0x${(t.validatedIrMask || 0).toString(16).toUpperCase().padStart(2, "0")} (${t.allPhysicalIrValidated ? "ALL 6 COMMISIONED" : "Awaiting Physical Sweep"})`;
 
         el.metricFaultMaskSub.textContent = `Mask: 0x${(t.activeFaultMask || 0).toString(16).toUpperCase().padStart(4, "0")} | ${t.faultReason || "NONE"}`;
+
+        // Adaptive Priority & Allocation Telemetry
+        if (el.adaptScoreMain) el.adaptScoreMain.textContent = String(t.adaptScoreMain ?? 0);
+        if (el.adaptScoreSide) el.adaptScoreSide.textContent = String(t.adaptScoreSide ?? 0);
+        if (el.adaptScoreTurn) el.adaptScoreTurn.textContent = String(t.adaptScoreTurn ?? 0);
+        if (el.adaptWaitMain) el.adaptWaitMain.textContent = `${t.adaptWaitMainMs ?? 0} ms`;
+        if (el.adaptWaitSide) el.adaptWaitSide.textContent = `${t.adaptWaitSideMs ?? 0} ms`;
+        if (el.adaptWaitTurn) el.adaptWaitTurn.textContent = `${t.adaptWaitTurnMs ?? 0} ms`;
+        if (el.adaptPedPriority) el.adaptPedPriority.textContent = t.pedPriorityLevel || "NONE";
+        if (el.adaptPedWaits) el.adaptPedWaits.textContent = `P1: ${t.ped1WaitMs ?? 0} ms | P2: ${t.ped2WaitMs ?? 0} ms`;
+        if (el.adaptNextTarget) el.adaptNextTarget.textContent = t.nextTargetPhase || "N/A";
+        if (el.adaptSelectionReason) el.adaptSelectionReason.textContent = t.selectionReason || "N/A";
+        if (el.adaptAllocGreen) el.adaptAllocGreen.textContent = t.allocGreenMs ? `${(t.allocGreenMs / 1000).toFixed(1)} s` : "--";
+        if (el.adaptSensorHealth) {
+          const faultedCount = sensorChannels.filter(c => c.stuckFault || c.chatterFault).length;
+          el.adaptSensorHealth.textContent = faultedCount > 0 ? `${faultedCount} FAULTED` : (t.allPhysicalIrValidated ? "ALL 6 OK" : "PARTIAL");
+        }
+        const fmtPassage = (p) => p ? `${p.confirmed} (Roll:${p.rolling}, ${p.rate}/m${p.both ? ", BOTH_OCC" : ""}${p.inc > 0 ? `, Inc:${p.inc}` : ""}${p.last > 0 ? `, Last:${p.last}ms` : ""})` : "0 (0.0/m)";
+        if (el.passageMainText) el.passageMainText.textContent = fmtPassage(t.passageMain);
+        if (el.passageSideText) el.passageSideText.textContent = fmtPassage(t.passageSide);
+        if (el.passageTurnText) el.passageTurnText.textContent = fmtPassage(t.passageTurn);
 
         // Safety gate check for ADAPTIVE mode
         const allIrCommissioned = (t.allPhysicalIrValidated || t.physicalIrValid === "YES" || t.validatedIrMask === 0x3F);
@@ -5241,7 +5366,8 @@
       // CONTROLS & COMMANDS ENABLEMENT
       // ======================================================================
       function updateControlsEnablement() {
-        const isConnected = (connectionStatus === "CONNECTED" || connectionStatus === "RECEIVING_DATA" || connectionStatus === "TELEMETRY STALE" || connectionStatus === "CONTROLLER FAULT");
+        const isConnected = (connectionStatus === CONN_STATE.CONNECTED || connectionStatus === CONN_STATE.RECEIVING_DATA || connectionStatus === CONN_STATE.TELEMETRY_STALE || connectionStatus === CONN_STATE.CONTROLLER_FAULT);
+        const isStale = (connectionStatus === CONN_STATE.TELEMETRY_STALE);
         const hasCmdPending = Boolean(pendingUserCommand);
         const hasTelemetry = Boolean(lastValidTelemetry);
         const mode = hasTelemetry ? lastValidTelemetry.operatingMode : null;
@@ -5250,19 +5376,19 @@
         const inFault = (fsmState === "FAULT_SAFE");
         const isSimMode = (mode === "SERIAL_SIMULATION");
 
-        // Mode Switching
-        el.btnModeFixed.disabled = !isConnected || hasCmdPending || inFault || (ctrlMode === "FIXED");
-        el.btnModeAdaptive.disabled = !isConnected || hasCmdPending || inFault || (ctrlMode === "ADAPTIVE");
-        el.btnModeManual.disabled = !isConnected || hasCmdPending || inFault || (ctrlMode === "MANUAL");
+        // Mode Switching (requires fresh telemetry)
+        el.btnModeFixed.disabled = !isConnected || isStale || hasCmdPending || inFault || (ctrlMode === "FIXED");
+        el.btnModeAdaptive.disabled = !isConnected || isStale || hasCmdPending || inFault || (ctrlMode === "ADAPTIVE");
+        el.btnModeManual.disabled = !isConnected || isStale || hasCmdPending || inFault || (ctrlMode === "MANUAL");
 
         el.manualStepBox.style.display = (ctrlMode === "MANUAL") ? "block" : "none";
-        el.btnManualNext.disabled = !isConnected || hasCmdPending || inFault || (ctrlMode !== "MANUAL");
+        el.btnManualNext.disabled = !isConnected || isStale || hasCmdPending || inFault || (ctrlMode !== "MANUAL");
 
         // Demands & Simulation
-        el.btnSimOn.disabled = !isConnected || hasCmdPending || inFault || isSimMode;
-        el.btnSimOff.disabled = !isConnected || hasCmdPending || inFault || !isSimMode;
+        el.btnSimOn.disabled = !isConnected || isStale || hasCmdPending || inFault || isSimMode;
+        el.btnSimOff.disabled = !isConnected || isStale || hasCmdPending || inFault || !isSimMode;
 
-        const canSim = isConnected && !hasCmdPending && !inFault && isSimMode;
+        const canSim = isConnected && !isStale && !hasCmdPending && !inFault && isSimMode;
         el.btnCarSideOn.disabled = !canSim;
         el.btnCarSideOff.disabled = !canSim;
         el.btnCarMainOn.disabled = !canSim;
@@ -5364,7 +5490,23 @@
           electricalOutputs: null,
           rawPinLevelsLine: null,
           activeFaultMask: 0x0000,
-          faultReason: null
+          faultReason: null,
+          allGreenDurationMs: null,
+          allGreenRemainingMs: null,
+          adaptScoreMain: 0,
+          adaptScoreSide: 0,
+          adaptScoreTurn: 0,
+          allocGreenMs: 0,
+          adaptWaitMainMs: 0,
+          adaptWaitSideMs: 0,
+          adaptWaitTurnMs: 0,
+          ped1WaitMs: 0,
+          ped2WaitMs: 0,
+          selectionReason: null,
+          pedPriorityLevel: "NONE",
+          passageMain: null,
+          passageSide: null,
+          passageTurn: null
         };
       }
 
@@ -5505,6 +5647,61 @@
             if (fm) {
               acc.activeFaultMask = parseInt(fm[1], 16);
               if (fm[2] && fm[2].trim() !== "NONE") acc.faultReason = fm[2].trim();
+            }
+            break;
+          }
+          case "All-Green Diag": {
+            const agM = val.match(/Duration:\s*(\d+)\s*ms\s*\|\s*Remaining:\s*(\d+)\s*ms/i);
+            if (agM) {
+              acc.allGreenDurationMs = parseInt(agM[1], 10);
+              acc.allGreenRemainingMs = parseInt(agM[2], 10);
+            }
+            break;
+          }
+          case "Adaptive Scores": {
+            const m = val.match(/MAIN=(\d+)\s+SIDE=(\d+)\s+TURN=(\d+)\s*\|\s*AllocGreen=(\d+)\s*ms/i);
+            if (m) {
+              acc.adaptScoreMain = parseInt(m[1], 10);
+              acc.adaptScoreSide = parseInt(m[2], 10);
+              acc.adaptScoreTurn = parseInt(m[3], 10);
+              acc.allocGreenMs = parseInt(m[4], 10);
+            }
+            break;
+          }
+          case "Movement Waits": {
+            const m = val.match(/MAIN=(\d+)\s*ms\s+SIDE=(\d+)\s*ms\s+TURN=(\d+)\s*ms\s*\|\s*PED1=(\d+)\s*ms\s+PED2=(\d+)\s*ms/i);
+            if (m) {
+              acc.adaptWaitMainMs = parseInt(m[1], 10);
+              acc.adaptWaitSideMs = parseInt(m[2], 10);
+              acc.adaptWaitTurnMs = parseInt(m[3], 10);
+              acc.ped1WaitMs = parseInt(m[4], 10);
+              acc.ped2WaitMs = parseInt(m[5], 10);
+            }
+            break;
+          }
+          case "Selection Reason": {
+            acc.selectionReason = val;
+            break;
+          }
+          case "Ped Priority": {
+            acc.pedPriorityLevel = val.toUpperCase();
+            break;
+          }
+          case "Passage Counts": {
+            const pRe = /(MAIN|SIDE|TURN)\[P=(\d+)\s+R=(\d+)\s+Rate=([0-9.]+)\s+Both=([01])\s+Inc=(\d+)\s+Last=(\d+)\]/gi;
+            let pm;
+            while ((pm = pRe.exec(val)) !== null) {
+              const obj = {
+                confirmed: parseInt(pm[2], 10),
+                rolling: parseInt(pm[3], 10),
+                rate: pm[4],
+                both: pm[5] === "1",
+                inc: parseInt(pm[6], 10),
+                last: parseInt(pm[7], 10)
+              };
+              if (pm[1].toUpperCase() === "MAIN") acc.passageMain = obj;
+              else if (pm[1].toUpperCase() === "SIDE") acc.passageSide = obj;
+              else if (pm[1].toUpperCase() === "TURN") acc.passageTurn = obj;
             }
             break;
           }
@@ -5751,17 +5948,18 @@
           return;
         }
 
-        // 4. Real-time Events
-        const eventMatch = line.match(/^\[(\d+)\s*ms\]\s+EVENT:\s+([A-Z0-9_]+)\s*\|\s*(.*)$/);
+        // 4. Real-time Events (supports both "[ms] EVENT: TYPE | detail" and "EVENT: TYPE | detail")
+        const eventMatch = line.match(/^(?:\[(\d+)\s*ms\]\s+)?EVENT:\s+([A-Z0-9_]+)\s*\|\s*(.*)$/);
         if (eventMatch) {
-          const espMs = eventMatch[1];
+          const espMs = eventMatch[1] || "0";
           const eventType = eventMatch[2];
           const detail = eventMatch[3];
 
           if (eventType === "SENSOR_DETECTED" || eventType === "SENSOR_RELEASED") {
-            const chM = detail.match(/Channel:\s*(\d+)/i);
-            if (chM) {
-              const chIdx = parseInt(chM[1], 10) - 1;
+            // Firmware format: "IR1 (GPIO 33) active (obstacle detected)" or "Channel: 1"
+            const irM = detail.match(/IR(\d+)\s*\(GPIO\s*(\d+)\)/i) || detail.match(/Channel:\s*(\d+)/i);
+            if (irM) {
+              const chIdx = parseInt(irM[1], 10) - 1;
               if (chIdx >= 0 && chIdx < 6) {
                 const ch = sensorChannels[chIdx];
                 if (eventType === "SENSOR_DETECTED") {
@@ -5782,17 +5980,31 @@
             return;
           }
 
-          if (eventType === "PEDESTRIAN_CALL_REGISTERED") {
-            const m = detail.match(/Crossing:\s*(\d+)/i);
-            if (m) {
-              const xNum = parseInt(m[1], 10);
-              if (xNum === 1 && lastValidTelemetry) lastValidTelemetry.ped1Demand = true;
-              if (xNum === 2 && lastValidTelemetry) lastValidTelemetry.ped2Demand = true;
-              if (xNum >= 1 && xNum <= 2 && pedButtons[xNum - 1]) pedButtons[xNum - 1].latched = 1;
-              if (lastValidTelemetry && (lastValidTelemetry.outputs || lastValidTelemetry.electricalOutputs)) {
-                renderPedestrians(lastValidTelemetry.outputs, lastValidTelemetry.electricalOutputs);
-              }
+          if (eventType === "PED_REQUEST_LATCHED" || eventType === "PEDESTRIAN_CALL_REGISTERED") {
+            let xNum = null;
+            const crossM = detail.match(/Crossing:\s*(\d+)/i);
+            const btnM = detail.match(/button\s*(\d+)/i);
+            if (crossM) {
+              xNum = parseInt(crossM[1], 10);
+            } else if (btnM) {
+              xNum = parseInt(btnM[1], 10);
+            } else if (/simulated pedestrian/i.test(detail)) {
+              xNum = 1;
             }
+            if (xNum === 1 && lastValidTelemetry) lastValidTelemetry.ped1Demand = true;
+            if (xNum === 2 && lastValidTelemetry) lastValidTelemetry.ped2Demand = true;
+            if (xNum >= 1 && xNum <= 2 && pedButtons[xNum - 1]) pedButtons[xNum - 1].latched = 1;
+            if (lastValidTelemetry && (lastValidTelemetry.outputs || lastValidTelemetry.electricalOutputs)) {
+              renderPedestrians(lastValidTelemetry.outputs, lastValidTelemetry.electricalOutputs);
+            }
+          }
+
+          if (eventType === "IR_SENSOR_COMMISSION") {
+            setTimeout(() => {
+              if (port && writer && !isDisconnecting) {
+                writeSerialLine("SENSORS").catch(() => {});
+              }
+            }, 80);
           }
 
           if (eventType === "LAMP_DIAG_STEP") {
@@ -5922,23 +6134,29 @@
         statusRequestInFlight = false;
         statusRequestManual = false;
 
-        const wasFirst = (lastValidTelemetry === null);
+        if (handshakeTimerId) {
+          clearTimeout(handshakeTimerId);
+          handshakeTimerId = null;
+        }
+        isHandshakeInProgress = false;
+
+        const wasFirst = (lastValidTelemetry === null || connectionStatus === CONN_STATE.PORT_OPENED || connectionStatus === CONN_STATE.CONNECTING);
         acc.wallTimeStr = formatWallTime(new Date());
         lastValidTelemetry = acc;
         lastTelemetryReceivedAtMs = Date.now();
 
-        if (connectionStatus !== "CONNECTED") {
+        if (connectionStatus !== CONN_STATE.CONNECTED && connectionStatus !== CONN_STATE.RECEIVING_DATA) {
           const portSummary = detectedFirmwareVersion
             ? `${selectedPortLabel} | FW ${detectedFirmwareVersion}`
             : selectedPortLabel;
-          setConnectionStatus("CONNECTED", portSummary);
+          setConnectionStatus(CONN_STATE.CONNECTED, portSummary);
         }
 
         if (wasFirst && !pendingUserCommand) {
           setCommandFeedback("success", "ESP32 Synchronized", `Verified ${acc.currentFsmState} (${acc.operatingMode}, Control: ${acc.controlMode}).`);
-          // Query initial timings and sensors right after connection
-          setTimeout(() => writeSerialLine("TIMING"), 250);
-          setTimeout(() => writeSerialLine("SENSORS"), 500);
+          startPollingLoop();
+          setTimeout(() => writeSerialLine("TIMING").catch(() => {}), 200);
+          setTimeout(() => writeSerialLine("SENSORS").catch(() => {}), 450);
         }
 
         if (wasManual || el.chkLogPollingStatus.checked) {
@@ -5959,8 +6177,8 @@
         active: null, // { id, cmd, sentAtMs, timeoutId }
 
         send: async function (cmdStr) {
-          if (!port || !writer || (connectionStatus !== "CONNECTED" && connectionStatus !== "RECEIVING_DATA" && connectionStatus !== "STALE" && connectionStatus !== "TELEMETRY STALE" && connectionStatus !== "CONTROLLER FAULT")) {
-            setCommandFeedback("error", "Not Connected", "Open ESP32 serial connection before issuing commands.");
+          if (!port || !writer || (connectionStatus !== CONN_STATE.CONNECTED && connectionStatus !== CONN_STATE.RECEIVING_DATA && connectionStatus !== CONN_STATE.TELEMETRY_STALE && connectionStatus !== CONN_STATE.CONTROLLER_FAULT)) {
+            setCommandFeedback("error", "Not Connected", "Open ESP32 serial connection and verify STATUS before issuing commands.");
             return false;
           }
           if (this.active) {
@@ -6086,11 +6304,11 @@
 
         staleCheckTimerId = setInterval(() => {
           const now = Date.now();
-          if ((connectionStatus === "RECEIVING_DATA" || connectionStatus === "CONNECTED" || connectionStatus === "CONTROLLER FAULT") && lastTelemetryReceivedAtMs > 0) {
+          if ((connectionStatus === CONN_STATE.RECEIVING_DATA || connectionStatus === CONN_STATE.CONNECTED || connectionStatus === CONN_STATE.CONTROLLER_FAULT) && lastTelemetryReceivedAtMs > 0) {
             const age = now - lastTelemetryReceivedAtMs;
             if (age > STALE_THRESHOLD_MS) {
-              setConnectionStatus("STALE");
-              appendConsole("sys-err", "STALE", `No valid STATUS response for ${age} ms.`);
+              setConnectionStatus(CONN_STATE.TELEMETRY_STALE);
+              appendConsole("sys-err", "TELEMETRY_STALE", `No valid STATUS response for ${age} ms.`);
             }
           }
         }, 1000);
@@ -6166,24 +6384,51 @@
         };
       }
 
+      function startHandshakeTimeout() {
+        if (handshakeTimerId) {
+          clearTimeout(handshakeTimerId);
+          handshakeTimerId = null;
+        }
+        handshakeTimerId = setTimeout(async () => {
+          handshakeTimerId = null;
+          if (connectionStatus === CONN_STATE.PORT_OPENED || connectionStatus === CONN_STATE.CONNECTING) {
+            isHandshakeInProgress = false;
+            const errMsg = "Handshake timeout: Port opened, but no valid ESP32 STATUS response arrived within 4.0 s.";
+            appendConsole("sys-err", "HANDSHAKE", errMsg);
+            await cleanupSerialResources();
+            setConnectionStatus(CONN_STATE.COMMUNICATION_ERROR, "STATUS Handshake Timeout");
+            setCommandFeedback("error", "ESP32 Not Responding", errMsg);
+          }
+        }, HANDSHAKE_TIMEOUT_MS);
+      }
+
       async function attemptAutoReconnect() {
-        if (isManualDisconnect) return;
+        if (isManualDisconnect || isHandshakeInProgress) return;
         if (!("serial" in navigator) && !isBridgeEnabled()) return;
 
+        isHandshakeInProgress = true;
         try {
           if (isBridgeEnabled()) {
             port = createSerialBridgePort();
           } else {
             const ports = await navigator.serial.getPorts();
             if (!ports || ports.length === 0) {
+              isHandshakeInProgress = false;
               scheduleNextReconnect("No permitted ports available");
               return;
             }
-            port = ports[0];
+            const matched = lastSelectedPortInfo
+              ? ports.find(p => {
+                  const i = p.getInfo ? p.getInfo() : {};
+                  return i.usbVendorId === lastSelectedPortInfo.usbVendorId && i.usbProductId === lastSelectedPortInfo.usbProductId;
+                })
+              : null;
+            port = matched || ports[0];
           }
           await port.open({ baudRate: SERIAL_BAUD });
 
           const info = port.getInfo ? port.getInfo() : {};
+          lastSelectedPortInfo = info;
           const usbDetail = (info.usbVendorId !== undefined)
             ? `USB: VID 0x${info.usbVendorId.toString(16).padStart(4, "0")}`
             : "COM Port";
@@ -6197,15 +6442,14 @@
           writer = port.writable.getWriter();
           runSerialReadLoop();
 
-          setConnectionStatus("CONNECTED", `${usbDetail} (115200 baud)`);
-          appendConsole("sys-info", "RECONNECTED", `Reconnected to ESP32 on ${selectedPortLabel} at ${SERIAL_BAUD} baud.`);
-          setCommandFeedback("success", "ESP32 Reconnected", "Connection restored automatically.");
+          setConnectionStatus(CONN_STATE.PORT_OPENED, `${usbDetail} (115200 baud)`);
+          appendConsole("sys-info", "HANDSHAKE", `Port reopened (${usbDetail}). Waiting for valid ESP32 STATUS response...`);
+          setCommandFeedback("pending", "Verifying ESP32", "Port reopened; awaiting valid STATUS response...");
 
-          startPollingLoop();
-          setTimeout(() => writeSerialLine("STATUS"), 150);
-          setTimeout(() => writeSerialLine("TIMING"), 350);
-          setTimeout(() => writeSerialLine("SENSORS"), 650);
+          startHandshakeTimeout();
+          setTimeout(() => writeSerialLine("STATUS").catch(() => {}), 150);
         } catch (err) {
+          isHandshakeInProgress = false;
           const msg = err && err.message ? err.message : String(err);
           scheduleNextReconnect(msg);
         }
@@ -6229,40 +6473,40 @@
       }
 
       async function connectSerial() {
-        if (!("serial" in navigator)) {
+        if (!("serial" in navigator) && !isBridgeEnabled()) {
           alert("Web Serial API is not supported in this browser. Use Chrome or Edge.");
+          return;
+        }
+        if (isHandshakeInProgress || port) {
+          setCommandFeedback("warning", "Connection In Progress", "Serial connection or handshake is already active.");
           return;
         }
 
         isManualDisconnect = false;
+        isHandshakeInProgress = true;
         autoReconnectAttempts = 0;
         if (autoReconnectTimerId) { clearTimeout(autoReconnectTimerId); autoReconnectTimerId = null; }
 
         try {
-          // Explicit Connection State 2: REQUESTING_PORT
-          setConnectionStatus("REQUESTING_PORT", "Selecting Port...");
+          setConnectionStatus(CONN_STATE.REQUESTING_PORT, "Selecting Port...");
           setCommandFeedback("pending", "Requesting Serial Port", "Select the ESP32 USB COM port in the browser dialog...");
           appendConsole("sys-info", "PORT REQ", `Opening Web Serial chooser at ${SERIAL_BAUD} baud...`);
 
           if (isBridgeEnabled()) {
             port = createSerialBridgePort();
           } else {
-            const existingPorts = await navigator.serial.getPorts();
-            if (existingPorts && existingPorts.length > 0) {
-              port = existingPorts[0];
-            } else {
-              port = await navigator.serial.requestPort();
-            }
+            // DEF-10A: Always open browser port picker so operator can choose among authorized ports
+            port = await navigator.serial.requestPort();
           }
 
-          // Explicit Connection State 3: CONNECTING
-          setConnectionStatus("CONNECTING", "Opening Port at 115200...");
+          setConnectionStatus(CONN_STATE.CONNECTING, "Opening Port at 115200...");
           setCommandFeedback("pending", "Connecting to ESP32", `Opening port at ${SERIAL_BAUD} baud...`);
           appendConsole("sys-info", "CONNECT", `Opening selected port at ${SERIAL_BAUD} baud...`);
 
           await port.open({ baudRate: SERIAL_BAUD });
 
           const info = port.getInfo ? port.getInfo() : {};
+          lastSelectedPortInfo = info;
           const usbDetail = (info.usbVendorId !== undefined)
             ? `USB: VID 0x${info.usbVendorId.toString(16).padStart(4, "0")}`
             : "COM Port";
@@ -6274,28 +6518,25 @@
           writer = port.writable.getWriter();
           runSerialReadLoop();
 
-          // Explicit Connection State 4: CONNECTED
-          setConnectionStatus("CONNECTED", `${usbDetail} (115200 baud)`);
-          appendConsole("sys-info", "PORT OPEN", `Port opened successfully at ${SERIAL_BAUD} baud.`);
-          setCommandFeedback("pending", "Serial Port Connected", "Verifying live ESP32 status and stream telemetry...");
+          // DEF-03: Port opened — remain in PORT_OPENED until a valid ESP32 STATUS block is received
+          setConnectionStatus(CONN_STATE.PORT_OPENED, `${usbDetail} (115200 baud)`);
+          appendConsole("sys-info", "PORT OPEN", `Port opened at ${SERIAL_BAUD} baud. Waiting for valid ESP32 STATUS response...`);
+          setCommandFeedback("pending", "Waiting for ESP32 STATUS", "Port opened; verifying Smart Traffic Lights firmware response...");
 
-          startPollingLoop();
-          setTimeout(() => writeSerialLine("STATUS"), 150);
-          setTimeout(() => writeSerialLine("TIMING"), 350);
-          setTimeout(() => writeSerialLine("SENSORS"), 650);
+          startHandshakeTimeout();
+          setTimeout(() => writeSerialLine("STATUS").catch(() => {}), 150);
         } catch (err) {
+          isHandshakeInProgress = false;
           const msg = err && err.message ? err.message : String(err);
           await cleanupSerialResources();
           if (err && err.name === "NotFoundError") {
-            // Explicit Connection State 1: DISCONNECTED (User cancelled dialog)
-            setConnectionStatus("DISCONNECTED", "Selection Cancelled");
+            setConnectionStatus(CONN_STATE.DISCONNECTED, "Selection Cancelled");
             setCommandFeedback("idle", "Selection Cancelled", "No port selected in browser chooser.");
             appendConsole("sys-info", "CANCEL", "Port selection cancelled by user.");
           } else {
-            // Explicit Connection State 8: ERROR
-            setConnectionStatus("ERROR", msg);
+            setConnectionStatus(CONN_STATE.COMMUNICATION_ERROR, msg);
             const helpfulMsg = (msg.includes("Failed to open") || msg.includes("Access denied"))
-              ? "COM5 is busy or locked by another application. Close any PlatformIO serial monitor, terminal, or test script and try again."
+              ? "Serial port is busy or locked by another application. Close any PlatformIO serial monitor, terminal, or test script and try again."
               : msg;
             setCommandFeedback("error", "Connection Failed", helpfulMsg);
             appendConsole("sys-err", "ERROR", `Connection failed: ${msg}`);
@@ -6313,10 +6554,6 @@
                 const { value, done } = await reader.read();
                 if (done) break;
                 if (value) {
-                  // Transition from preliminary connecting/stale to receiving on first incoming chunk
-                  if (connectionStatus === "CONNECTING" || connectionStatus === "STALE") {
-                    setConnectionStatus("RECEIVING_DATA");
-                  }
                   rxBuffer += decoder.decode(value, { stream: true });
                   let newlineIdx;
                   while ((newlineIdx = rxBuffer.indexOf("\n")) !== -1) {
@@ -6342,6 +6579,8 @@
 
       async function cleanupSerialResources() {
         stopPollingLoop();
+        if (handshakeTimerId) { clearTimeout(handshakeTimerId); handshakeTimerId = null; }
+        isHandshakeInProgress = false;
         readLoopActive = false;
 
         if (commandManager.active) {
@@ -6659,11 +6898,9 @@
         }
         if (el.btnWizardCommit) {
           el.btnWizardCommit.addEventListener("click", () => {
+            // DEF-09: Do NOT optimistically mark validated=true; wait for ESP32 confirmation & SENSORS refresh
+            setCommandFeedback("pending", `Commissioning IR${wizardChannelId}`, "Awaiting ESP32 validation and SENSORS confirmation...");
             sendUserCommand(`COMMISSION IR ${wizardChannelId} ON`);
-            const ch = sensorChannels.find(c => c.id === wizardChannelId);
-            if (ch) ch.validated = true;
-            renderSensors();
-            updateWizardUI();
           });
         }
 

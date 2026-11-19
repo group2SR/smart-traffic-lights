@@ -12,8 +12,10 @@ TrafficController::TrafficController()
 #endif
       nextTarget_(NextPhaseTarget::MAIN_ROAD),
       stateStartMs_(0),
+      mainGapStartMs_(0),
       sideGapStartMs_(0),
       lastUpdateMs_(0),
+      mainGapTimerActive_(false),
       sideGapTimerActive_(false),
       postPedClearanceActive_(false),
       manualStepRequested_(false),
@@ -22,7 +24,8 @@ TrafficController::TrafficController()
       diagSession_{},
       allGreenSession_{},
       transitionCb_(nullptr),
-      eventLogCb_(nullptr) {
+      eventLogCb_(nullptr),
+      lastSelectionReason_("STARTUP_SAFE") {
     diagSession_.active = false;
     diagSession_.holdDurationMs = 1000;
     diagSession_.clearanceDurationMs = 500;
@@ -94,9 +97,14 @@ void TrafficController::begin(uint32_t nowMs) {
 #endif
     nextTarget_             = NextPhaseTarget::MAIN_ROAD;
     stateStartMs_           = nowMs;
+    mainGapStartMs_         = nowMs;
     sideGapStartMs_         = nowMs;
     lastUpdateMs_           = nowMs;
+    mainGapTimerActive_     = false;
     sideGapTimerActive_     = false;
+    mainGapTimerActive_     = false;
+    mainGapStartMs_         = nowMs;
+    sideGapStartMs_         = nowMs;
     postPedClearanceActive_ = false;
     manualStepRequested_    = false;
     allGreenHoldActive_     = false;
@@ -317,6 +325,7 @@ bool TrafficController::commissionPedestrianDriver(uint32_t nowMs, bool verified
 bool TrafficController::commissionIrSensorChannel(uint32_t nowMs, uint8_t idx, bool validated, const char** rejectReason) {
     if (state_ == TrafficState::FAULT_SAFE) {
         if (rejectReason) *rejectReason = "Controller is in FAULT_SAFE";
+        logEvent(nowMs, "COMMISSION_REJECTED", "Cannot commission IR channel in FAULT_SAFE");
         return false;
     }
     if (idx >= TrafficConfig::IR_SENSOR_COUNT) {
@@ -362,11 +371,20 @@ bool TrafficController::commissionProtectedTurn(uint32_t nowMs, bool commissione
         return false;
     }
     if (commissioned) {
+        if (!outputDriver_.isVehicleDriverVerified() ||
+            outputDriver_.getVehicleDriverType() == TrafficConfig::OutputDriverType::UNVERIFIED_SAFE_DISABLED) {
+            if (rejectReason) *rejectReason = "Vehicle output driver must be verified before commissioning Protected Turn";
+            logEvent(nowMs, "COMMISSION_REJECTED", "Protected Turn rejected: vehicle driver unverified");
+            return false;
+        }
         const TrafficConfig::ConflictMatrixConfig& cm = phaseMgr_.getConflictMatrix();
         if (!cm.rightHandTrafficRule ||
-            !cm.conflicts[2][0] || !cm.conflicts[2][1] ||
-            !cm.conflicts[2][3] || !cm.conflicts[2][4]) {
-            if (rejectReason) *rejectReason = "RHT Protected Turn conflict matrix validation failed";
+            !cm.conflicts[2][0] || !cm.conflicts[0][2] ||
+            !cm.conflicts[2][1] || !cm.conflicts[1][2] ||
+            !cm.conflicts[2][3] || !cm.conflicts[3][2] ||
+            !cm.conflicts[2][4] || !cm.conflicts[4][2]) {
+            if (rejectReason) *rejectReason = "Protected Turn conflict matrix validation failed";
+            logEvent(nowMs, "COMMISSION_REJECTED", "Protected Turn conflict matrix validation failed");
             return false;
         }
     }
@@ -551,6 +569,11 @@ void TrafficController::updateLampDiagnostics(uint32_t nowMs) {
                          "Completed lamp diagnostic sequence; restored normal operation");
                 controlMode_ = diagSession_.restoreMode;
                 nextTarget_ = NextPhaseTarget::MAIN_ROAD;
+                mainGapTimerActive_ = !hasActivePresenceForCurrentPhase(TrafficConfig::MovementId::MAIN_ROAD);
+                mainGapStartMs_ = nowMs;
+                sideGapTimerActive_ = false;
+                demandMgr_.notifyPhaseServed(nowMs, TrafficConfig::MovementId::MAIN_ROAD);
+                pedCtrl_.notifyVehiclePhaseServed();
                 transitionTo(nowMs, TrafficState::MAIN_GREEN, "DIAG_COMPLETE_TO_MAIN_GREEN");
                 return;
             }
@@ -961,6 +984,7 @@ void TrafficController::processAllPhysicalInputs(uint32_t nowMs,
         }
     }
 
+    detector_.updateRoadPassageTracking(nowMs);
     refreshDemandManager(nowMs);
 }
 
@@ -1056,9 +1080,10 @@ bool TrafficController::setSimMovementDemand(uint32_t nowMs, TrafficConfig::Move
         logEvent(nowMs, wasActive ? "DEMAND_INFO" : "DEMAND_REGISTERED",
                  wasActive ? "Simulated vehicle demand already ON" : "Simulated vehicle demand ON");
         if ((movement == TrafficConfig::MovementId::SIDE_ROAD && state_ == TrafficState::SIDE_GREEN) ||
-            (movement == TrafficConfig::MovementId::PROTECTED_TURN && state_ == TrafficState::TURN_GREEN) ||
-            (movement == TrafficConfig::MovementId::MAIN_ROAD && state_ == TrafficState::MAIN_GREEN)) {
+            (movement == TrafficConfig::MovementId::PROTECTED_TURN && state_ == TrafficState::TURN_GREEN)) {
             sideGapTimerActive_ = false;
+        } else if (movement == TrafficConfig::MovementId::MAIN_ROAD && state_ == TrafficState::MAIN_GREEN) {
+            mainGapTimerActive_ = false;
         }
     } else {
         logEvent(nowMs, wasActive ? "DEMAND_CLEARED" : "DEMAND_INFO",
@@ -1068,6 +1093,11 @@ bool TrafficController::setSimMovementDemand(uint32_t nowMs, TrafficConfig::Move
             !sideGapTimerActive_) {
             sideGapTimerActive_ = true;
             sideGapStartMs_     = nowMs;
+        } else if (movement == TrafficConfig::MovementId::MAIN_ROAD &&
+                   state_ == TrafficState::MAIN_GREEN &&
+                   !mainGapTimerActive_) {
+            mainGapTimerActive_ = true;
+            mainGapStartMs_     = nowMs;
         }
     }
 
@@ -1122,6 +1152,10 @@ bool TrafficController::clearSimulatedDemand(uint32_t nowMs) {
         sideGapTimerActive_ = true;
         sideGapStartMs_     = nowMs;
     }
+    if (state_ == TrafficState::MAIN_GREEN && !mainGapTimerActive_) {
+        mainGapTimerActive_ = true;
+        mainGapStartMs_     = nowMs;
+    }
 
     refreshDemandManager(nowMs);
 
@@ -1163,6 +1197,9 @@ void TrafficController::resetLogical(uint32_t nowMs, const char* reason) {
     phaseMgr_.clearEmergencyPriority();
 
     sideGapTimerActive_     = false;
+    mainGapTimerActive_     = false;
+    mainGapStartMs_         = nowMs;
+    sideGapStartMs_         = nowMs;
     postPedClearanceActive_ = false;
     manualStepRequested_    = false;
     allGreenHoldActive_     = false;
@@ -1256,9 +1293,10 @@ NextPhaseTarget TrafficController::selectNextTargetManual(TrafficState currentGr
 }
 
 NextPhaseTarget TrafficController::selectNextTargetAdaptive(TrafficConfig::MovementId currentMovement) const {
-    // Check emergency priority first
+    // 1. Safety / Emergency priority first
     if (phaseMgr_.isEmergencyPriorityActive()) {
         const TrafficConfig::MovementId em = phaseMgr_.getEmergencyMovement();
+        lastSelectionReason_ = "EMERGENCY_PRIORITY";
         if (em == TrafficConfig::MovementId::MAIN_ROAD) return NextPhaseTarget::MAIN_ROAD;
         if (em == TrafficConfig::MovementId::SIDE_ROAD) return NextPhaseTarget::SIDE_ROAD;
         if (em == TrafficConfig::MovementId::PROTECTED_TURN && phaseMgr_.isProtectedTurnCommissioned()) {
@@ -1266,11 +1304,11 @@ NextPhaseTarget TrafficController::selectNextTargetAdaptive(TrafficConfig::Movem
         }
     }
 
-    // Fixed-time fallback check:
-    // If sensors are faulted, disconnected, unvalidated, or stale, fall back to fixed-time rotation!
+    // 1b. Fixed-time fallback if any IR sensor is faulted or unvalidated
     const bool sensorFallback = detector_.isAnyChannelFaulted() ||
                                 !detector_.isAllChannelsValidated();
     if (sensorFallback) {
+        lastSelectionReason_ = "FIXED_FALLBACK_SENSOR_FAULT";
         TrafficState currState = TrafficState::MAIN_GREEN;
         if (currentMovement == TrafficConfig::MovementId::SIDE_ROAD) {
             currState = TrafficState::SIDE_GREEN;
@@ -1283,69 +1321,156 @@ NextPhaseTarget TrafficController::selectNextTargetAdaptive(TrafficConfig::Movem
         return selectNextTargetFixed(currState);
     }
 
-    const uint32_t mainScore = (currentMovement == TrafficConfig::MovementId::MAIN_ROAD)
-                                   ? 0
-                                   : demandMgr_.calculateScore(TrafficConfig::MovementId::MAIN_ROAD);
-    const uint32_t sideScore = (currentMovement == TrafficConfig::MovementId::SIDE_ROAD)
-                                   ? 0
-                                   : demandMgr_.calculateScore(TrafficConfig::MovementId::SIDE_ROAD);
-    const uint32_t turnScore = (currentMovement == TrafficConfig::MovementId::PROTECTED_TURN ||
-                                !phaseMgr_.isProtectedTurnCommissioned())
-                                   ? 0
-                                   : demandMgr_.calculateScore(TrafficConfig::MovementId::PROTECTED_TURN);
+    // Evaluate Pedestrian Priority Manager independently from vehicle scores
+    const TrafficConfig::DemandConfig& dcfg = demandMgr_.getDemandConfig();
+    const PedestrianPrioritySummary pedPri = pedCtrl_.evaluatePriority(
+        lastUpdateMs_, phaseMgr_.getConflictMatrix(), dcfg.pedUrgencyWaitMs);
+    const bool currentlyInPed = (currentMovement == TrafficConfig::MovementId::PED_CROSSING_1 ||
+                                 currentMovement == TrafficConfig::MovementId::PED_CROSSING_2);
 
-    // Pedestrian score: when requested, competes fairly with waiting-time priority and starvation prevention
-    uint32_t pedScore = 0;
-    if (pedCtrl_.hasAnyDemand() && currentMovement != TrafficConfig::MovementId::PED_CROSSING_1) {
-        const TrafficConfig::DemandConfig& dcfg = demandMgr_.getDemandConfig();
-        pedScore = static_cast<uint32_t>(dcfg.activeSensorWeight);
-        if (lastServedNonMain_ != TrafficState::PED_WALK) {
-            pedScore += 1U;
-        }
-        if (dcfg.waitTimeWeightMs > 0) {
-            pedScore += (pedCtrl_.getMaxWaitingTimeMs(lastUpdateMs_) / dcfg.waitTimeWeightMs);
-        }
-        if (pedCtrl_.getMaxSkippedCycles() >= dcfg.starvationSkipLimit) {
-            pedScore += dcfg.starvationBoostScore;
-        }
-    }
+    // Check if any vehicle approach has hit maximum-wait protection
+    const bool mainMaxWait = (currentMovement != TrafficConfig::MovementId::MAIN_ROAD) &&
+                             demandMgr_.isApproachAtMaxWait(TrafficConfig::MovementId::MAIN_ROAD);
+    const bool sideMaxWait = (currentMovement != TrafficConfig::MovementId::SIDE_ROAD) &&
+                             demandMgr_.isApproachAtMaxWait(TrafficConfig::MovementId::SIDE_ROAD);
+    const bool turnMaxWait = (currentMovement != TrafficConfig::MovementId::PROTECTED_TURN) &&
+                             phaseMgr_.isProtectedTurnCommissioned() &&
+                             demandMgr_.isApproachAtMaxWait(TrafficConfig::MovementId::PROTECTED_TURN);
+    const bool anyVehMaxWait = mainMaxWait || sideMaxWait || turnMaxWait;
 
-    // Choose the highest scoring waiting target
-    uint32_t bestScore = 0;
-    NextPhaseTarget bestTarget = NextPhaseTarget::MAIN_ROAD;
-
-    if (pedScore > bestScore) {
-        bestScore  = pedScore;
-        bestTarget = NextPhaseTarget::PEDESTRIAN;
-    }
-    if (turnScore > bestScore) {
-        bestScore  = turnScore;
-        bestTarget = NextPhaseTarget::PROTECTED_TURN;
-    }
-    if (sideScore > bestScore) {
-        bestScore  = sideScore;
-        bestTarget = NextPhaseTarget::SIDE_ROAD;
-    }
-    if (mainScore > bestScore) {
-        bestScore  = mainScore;
-        bestTarget = NextPhaseTarget::MAIN_ROAD;
+    // 2. Pedestrian-first service & pedestrian maximum-wait protection
+    if (pedPri.anyPending && !currentlyInPed) {
+        if (pedPri.urgencyActive || !anyVehMaxWait) {
+            lastSelectionReason_ = pedPri.urgencyActive
+                                       ? "PEDESTRIAN_MAX_WAIT_URGENT"
+                                       : "PEDESTRIAN_FIRST_PRIORITY";
+            return NextPhaseTarget::PEDESTRIAN;
+        }
     }
 
-    if (bestScore == 0) {
-        // All sensors clear: no vehicle/ped demand detected.
-        // Fall back to fixed-time cyclic scheduling so all permitted movements cycle continuously!
-        TrafficState currState = TrafficState::MAIN_GREEN;
-        if (currentMovement == TrafficConfig::MovementId::SIDE_ROAD) {
-            currState = TrafficState::SIDE_GREEN;
-        } else if (currentMovement == TrafficConfig::MovementId::PROTECTED_TURN) {
-            currState = TrafficState::TURN_GREEN;
-        } else if (currentMovement == TrafficConfig::MovementId::PED_CROSSING_1 ||
-                   currentMovement == TrafficConfig::MovementId::PED_CROSSING_2) {
-            currState = TrafficState::PED_WALK;
+    // 3. Vehicle movements approaching/exceeding maximum waiting limits
+    if (anyVehMaxWait) {
+        struct MaxWaitCand {
+            bool active;
+            uint32_t waitMs;
+            uint8_t score;
+            NextPhaseTarget target;
+        };
+        const MaxWaitCand cands[3] = {
+            { mainMaxWait, demandMgr_.getApproachState(TrafficConfig::MovementId::MAIN_ROAD).waitingTimeMs,
+              demandMgr_.getNormalizedPriority(TrafficConfig::MovementId::MAIN_ROAD), NextPhaseTarget::MAIN_ROAD },
+            { sideMaxWait, demandMgr_.getApproachState(TrafficConfig::MovementId::SIDE_ROAD).waitingTimeMs,
+              demandMgr_.getNormalizedPriority(TrafficConfig::MovementId::SIDE_ROAD), NextPhaseTarget::SIDE_ROAD },
+            { turnMaxWait, demandMgr_.getApproachState(TrafficConfig::MovementId::PROTECTED_TURN).waitingTimeMs,
+              demandMgr_.getNormalizedPriority(TrafficConfig::MovementId::PROTECTED_TURN), NextPhaseTarget::PROTECTED_TURN }
+        };
+        int bestIdx = -1;
+        for (int i = 0; i < 3; ++i) {
+            if (!cands[i].active) continue;
+            if (bestIdx < 0 ||
+                cands[i].waitMs > cands[bestIdx].waitMs ||
+                (cands[i].waitMs == cands[bestIdx].waitMs && cands[i].score > cands[bestIdx].score)) {
+                bestIdx = i;
+            }
         }
-        return selectNextTargetFixed(currState);
+        if (bestIdx >= 0) {
+            lastSelectionReason_ = "VEHICLE_MAX_WAIT_PROTECTION";
+            return cands[bestIdx].target;
+        }
     }
-    return bestTarget;
+
+    // 4. Demand-weighted vehicle movement selection (0..100 normalized priority)
+    const uint8_t mainScore = (currentMovement == TrafficConfig::MovementId::MAIN_ROAD)
+                                  ? 0
+                                  : demandMgr_.getNormalizedPriority(TrafficConfig::MovementId::MAIN_ROAD);
+    const uint8_t sideScore = (currentMovement == TrafficConfig::MovementId::SIDE_ROAD)
+                                  ? 0
+                                  : demandMgr_.getNormalizedPriority(TrafficConfig::MovementId::SIDE_ROAD);
+    const uint8_t turnScore = (currentMovement == TrafficConfig::MovementId::PROTECTED_TURN ||
+                               !phaseMgr_.isProtectedTurnCommissioned())
+                                  ? 0
+                                  : demandMgr_.getNormalizedPriority(TrafficConfig::MovementId::PROTECTED_TURN);
+
+    struct VehCand {
+        uint8_t score;
+        uint8_t skipped;
+        uint32_t waitMs;
+        NextPhaseTarget target;
+    };
+    const VehCand vCands[3] = {
+        { turnScore, demandMgr_.getApproachState(TrafficConfig::MovementId::PROTECTED_TURN).skippedCycles,
+          demandMgr_.getApproachState(TrafficConfig::MovementId::PROTECTED_TURN).waitingTimeMs, NextPhaseTarget::PROTECTED_TURN },
+        { sideScore, demandMgr_.getApproachState(TrafficConfig::MovementId::SIDE_ROAD).skippedCycles,
+          demandMgr_.getApproachState(TrafficConfig::MovementId::SIDE_ROAD).waitingTimeMs, NextPhaseTarget::SIDE_ROAD },
+        { mainScore, demandMgr_.getApproachState(TrafficConfig::MovementId::MAIN_ROAD).skippedCycles,
+          demandMgr_.getApproachState(TrafficConfig::MovementId::MAIN_ROAD).waitingTimeMs, NextPhaseTarget::MAIN_ROAD }
+    };
+
+    // 5. Select highest priority with fairness-based tie-breaking
+    int bestV = -1;
+    for (int i = 0; i < 3; ++i) {
+        if (vCands[i].score == 0) continue;
+        if (bestV < 0) {
+            bestV = i;
+            continue;
+        }
+        if (vCands[i].score > vCands[bestV].score) {
+            bestV = i;
+        } else if (vCands[i].score == vCands[bestV].score) {
+            if (vCands[i].skipped > vCands[bestV].skipped ||
+                (vCands[i].skipped == vCands[bestV].skipped && vCands[i].waitMs > vCands[bestV].waitMs)) {
+                bestV = i;
+            }
+        }
+    }
+
+    if (bestV >= 0) {
+        lastSelectionReason_ = "ADAPTIVE_WEIGHTED_PRIORITY";
+        return vCands[bestV].target;
+    }
+
+    // 6. Default/idle behaviour when no demand exists
+    lastSelectionReason_ = "IDLE_FIXED_ROTATION";
+    TrafficState currState = TrafficState::MAIN_GREEN;
+    if (currentMovement == TrafficConfig::MovementId::SIDE_ROAD) {
+        currState = TrafficState::SIDE_GREEN;
+    } else if (currentMovement == TrafficConfig::MovementId::PROTECTED_TURN) {
+        currState = TrafficState::TURN_GREEN;
+    } else if (currentlyInPed) {
+        currState = TrafficState::PED_WALK;
+    }
+    return selectNextTargetFixed(currState);
+}
+
+uint32_t TrafficController::getAllocatedGreenMs(TrafficConfig::MovementId movement) const {
+    uint32_t minG = timings_.mainMinGreenMs;
+    uint32_t maxG = timings_.mainMaxGreenMs;
+    if (movement == TrafficConfig::MovementId::SIDE_ROAD) {
+        minG = timings_.sideMinGreenMs;
+        maxG = timings_.sideMaxGreenMs;
+    } else if (movement == TrafficConfig::MovementId::PROTECTED_TURN) {
+        minG = timings_.turnMinGreenMs;
+        maxG = timings_.turnMaxGreenMs;
+    }
+    if (controlMode_ == ControlMode::FIXED || controlMode_ == ControlMode::MANUAL) {
+        return minG;
+    }
+    const ApproachDemandState& st = demandMgr_.getApproachState(movement);
+    if (!st.hasDemand && st.activeSensorCount == 0) {
+        return minG;
+    }
+    // Scale proportionately between minG and maxG based on normalized demand/continuous score
+    const uint32_t span = (maxG > minG) ? (maxG - minG) : 0;
+    const uint32_t factor = (st.activeSensorCount >= 2) ? 100U : st.continuousScore;
+    return minG + ((span * factor) / 100U);
+}
+
+uint32_t TrafficController::getCurrentGreenAllocationMs() const {
+    if (state_ == TrafficState::MAIN_GREEN) return getAllocatedGreenMs(TrafficConfig::MovementId::MAIN_ROAD);
+    if (state_ == TrafficState::SIDE_GREEN) return getAllocatedGreenMs(TrafficConfig::MovementId::SIDE_ROAD);
+    if (state_ == TrafficState::TURN_GREEN) return getAllocatedGreenMs(TrafficConfig::MovementId::PROTECTED_TURN);
+    if (state_ == TrafficState::PED_WALK)   return timings_.pedWalkMs;
+    return 0;
 }
 
 NextPhaseTarget TrafficController::selectNextTargetAfterMain() const {
@@ -1532,10 +1657,12 @@ void TrafficController::update(uint32_t nowMs) {
                     pedCtrl_.notifyVehiclePhaseServed();
                     transitionTo(nowMs, TrafficState::TURN_GREEN, "ALL_RED_CLEARANCE_COMPLETE");
                 } else if (nextTarget_ == NextPhaseTarget::PEDESTRIAN) {
-                    pedCtrl_.beginWalkPhase();
+                    pedCtrl_.beginWalkPhase(phaseMgr_.getConflictMatrix());
                     demandMgr_.notifyPhaseServed(nowMs, TrafficConfig::MovementId::PED_CROSSING_1);
                     transitionTo(nowMs, TrafficState::PED_WALK, "ALL_RED_CLEARANCE_COMPLETE");
                 } else {
+                    mainGapTimerActive_ = !hasActivePresenceForCurrentPhase(TrafficConfig::MovementId::MAIN_ROAD);
+                    mainGapStartMs_     = nowMs;
                     sideGapTimerActive_ = false;
                     demandMgr_.notifyPhaseServed(nowMs, TrafficConfig::MovementId::MAIN_ROAD);
                     pedCtrl_.notifyVehiclePhaseServed();
@@ -1555,21 +1682,31 @@ void TrafficController::update(uint32_t nowMs) {
                 break;
             }
 
+            const bool mainPresence = hasActivePresenceForCurrentPhase(TrafficConfig::MovementId::MAIN_ROAD);
+            if (mainPresence) {
+                mainGapTimerActive_ = false;
+            } else if (!mainGapTimerActive_) {
+                mainGapTimerActive_ = true;
+                mainGapStartMs_     = nowMs;
+            }
+            const uint32_t mainGapElapsed = mainGapTimerActive_ ? (nowMs - mainGapStartMs_) : 0;
+
             if (elapsed >= timings_.mainMinGreenMs) {
                 const NextPhaseTarget target = selectNextTargetAfterMain();
                 if (target != NextPhaseTarget::MAIN_ROAD) {
-                    // In AUTO, ACTUATED, or ADAPTIVE mode, if Main Road has active vehicle presence,
-                    // extend Main Green up to mainMaxGreenMs before yielding.
-                    const bool mainPresence = hasActivePresenceForCurrentPhase(TrafficConfig::MovementId::MAIN_ROAD);
-                    const bool canExtendMain =
+                    // In AUTO, ACTUATED, or ADAPTIVE mode, extend Main Green while Main Road
+                    // has active presence or until mainClearGapMs expires, capped at mainMaxGreenMs.
+                    const bool isActuatedMode =
                         (controlMode_ == ControlMode::AUTO ||
                          controlMode_ == ControlMode::ACTUATED ||
-                         controlMode_ == ControlMode::ADAPTIVE) &&
-                        mainPresence &&
-                        !phaseMgr_.isEmergencyPriorityActive() &&
-                        (elapsed < timings_.mainMaxGreenMs);
+                         controlMode_ == ControlMode::ADAPTIVE);
+                    const bool gapExpiredOrNoExtend =
+                        !isActuatedMode ||
+                        phaseMgr_.isEmergencyPriorityActive() ||
+                        (elapsed >= timings_.mainMaxGreenMs) ||
+                        (mainGapTimerActive_ && mainGapElapsed >= timings_.mainClearGapMs);
 
-                    if (!canExtendMain) {
+                    if (gapExpiredOrNoExtend) {
                         detector_.clearLatchedDemandForMovement(TrafficConfig::MovementId::MAIN_ROAD);
                         nextTarget_ = target;
                         const char* reason = (target == NextPhaseTarget::PEDESTRIAN)
@@ -1827,6 +1964,9 @@ void TrafficController::transitionTo(uint32_t nowMs, TrafficState newState, cons
     state_               = newState;
     stateStartMs_        = nowMs;
     manualStepRequested_ = false;
+    if (diagSession_.active && newState == TrafficState::ALL_RED) {
+        diagSession_.stepStartMs = nowMs;
+    }
     if (controlMode_ != ControlMode::MANUAL && outputDriver_.isLampTestActive()) {
         outputDriver_.clearLampTest();
     }

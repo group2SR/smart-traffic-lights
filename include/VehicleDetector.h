@@ -50,6 +50,31 @@ struct IrChannelStatus {
     uint8_t  transitionCountInWindow;
 };
 
+enum class RoadPassageState : uint8_t {
+    IDLE                 = 0,
+    ZONE_OCCUPIED        = 1,
+    BOTH_OCCUPIED        = 2,
+    INCOMPLETE_WAIT_CLEAR= 3,
+    FAULT_SUSPENDED      = 4
+};
+
+struct RoadPassageStats {
+    RoadPassageState state;
+    bool             frontBlocked;
+    bool             rearBlocked;
+    bool             bothOccupied;
+    bool             congestionSuspended;
+    bool             rearWasBlockedInCycle;
+    uint32_t         zoneStartMs;
+    uint32_t         bothOccupiedStartMs;
+    uint32_t         lastPassageMs;
+    uint32_t         confirmedPassages;
+    uint16_t         rollingPassages;
+    uint16_t         incompleteSequences;
+    uint16_t         arrivalRateTenthsPerMin; // e.g., 25 = 2.5 veh/min
+    uint32_t         rollingWindowStartMs;
+};
+
 class VehicleDetector {
 public:
     VehicleDetector() : config_(TrafficConfig::DEFAULT_SENSOR_CONFIG) {
@@ -78,6 +103,11 @@ public:
             channels_[i].transitionCountInWindow = 0;
         }
         recomputeSensorPositionsOnRoads();
+        for (uint8_t r = 0; r < TrafficConfig::VEHICLE_GROUP_COUNT; ++r) {
+            roadPassages_[r] = RoadPassageStats{};
+            roadPassages_[r].state = RoadPassageState::IDLE;
+            roadPassages_[r].rollingWindowStartMs = nowMs;
+        }
     }
 
     bool applySensorConfig(const TrafficConfig::SensorConfig& cfg) {
@@ -401,6 +431,148 @@ public:
         return -1;
     }
 
+    void updateRoadPassageTracking(uint32_t nowMs) {
+        for (uint8_t r = 0; r < TrafficConfig::VEHICLE_GROUP_COUNT; ++r) {
+            const TrafficConfig::MovementId road = static_cast<TrafficConfig::MovementId>(r);
+            RoadPassageStats& ps = roadPassages_[r];
+
+            if ((nowMs - ps.rollingWindowStartMs) >= TrafficConfig::PASSAGE_ROLLING_WINDOW_MS) {
+                ps.rollingWindowStartMs    = nowMs;
+                ps.rollingPassages         = 0;
+                ps.arrivalRateTenthsPerMin = 0;
+            }
+
+            const int8_t fIdx = getRoadSensorChannelIndex(road, 0);
+            const int8_t rIdx = getRoadSensorChannelIndex(road, 1);
+            if (fIdx < 0 || rIdx < 0) continue;
+
+            const IrChannelStatus& fCh = channels_[fIdx];
+            const IrChannelStatus& rCh = channels_[rIdx];
+            const bool sensorsHealthy = fCh.validated && rCh.validated &&
+                                        !fCh.stuckFault && !fCh.chatterFault &&
+                                        !rCh.stuckFault && !rCh.chatterFault;
+
+            const bool fBlk = fCh.validated && !fCh.stuckFault && !fCh.chatterFault && fCh.stableDetected;
+            const bool rBlk = rCh.validated && !rCh.stuckFault && !rCh.chatterFault && rCh.stableDetected;
+            ps.frontBlocked = fBlk;
+            ps.rearBlocked  = rBlk;
+            ps.bothOccupied = (fBlk && rBlk);
+
+            if (!sensorsHealthy) {
+                if (ps.state != RoadPassageState::FAULT_SUSPENDED) {
+                    ps.state                 = RoadPassageState::FAULT_SUSPENDED;
+                    ps.congestionSuspended   = true;
+                    ps.rearWasBlockedInCycle = false;
+                }
+                continue;
+            }
+
+            if (ps.state == RoadPassageState::FAULT_SUSPENDED) {
+                if (!fBlk && !rBlk) {
+                    ps.state               = RoadPassageState::IDLE;
+                    ps.congestionSuspended = false;
+                }
+                continue;
+            }
+
+            // Reset tracking sequence cleanly whenever both sensors become clear
+            if (!fBlk && !rBlk) {
+                if (ps.state == RoadPassageState::ZONE_OCCUPIED && ps.rearWasBlockedInCycle) {
+                    // Front cleared before rear completed; if rear also cleared on same tick, treat as incomplete
+                    ps.incompleteSequences++;
+                }
+                ps.state                 = RoadPassageState::IDLE;
+                ps.congestionSuspended   = false;
+                ps.rearWasBlockedInCycle = false;
+                continue;
+            }
+
+            switch (ps.state) {
+                case RoadPassageState::IDLE:
+                    if (fBlk && !rBlk) {
+                        ps.state                 = RoadPassageState::ZONE_OCCUPIED;
+                        ps.zoneStartMs           = nowMs;
+                        ps.congestionSuspended   = false;
+                        ps.rearWasBlockedInCycle = false;
+                    } else if (fBlk && rBlk) {
+                        // Both blocked simultaneously from idle -> cannot establish vehicle separation
+                        ps.state                 = RoadPassageState::BOTH_OCCUPIED;
+                        ps.bothOccupiedStartMs   = nowMs;
+                        ps.congestionSuspended   = true;
+                        ps.rearWasBlockedInCycle = false;
+                    } else {
+                        // Rear blocked without front -> invalid/incomplete sequence
+                        ps.incompleteSequences++;
+                        ps.state                 = RoadPassageState::INCOMPLETE_WAIT_CLEAR;
+                        ps.rearWasBlockedInCycle = false;
+                    }
+                    break;
+
+                case RoadPassageState::ZONE_OCCUPIED:
+                    if (!fBlk && rBlk) {
+                        // Front sensor cleared before rear activation/completion
+                        ps.incompleteSequences++;
+                        ps.state                 = RoadPassageState::INCOMPLETE_WAIT_CLEAR;
+                        ps.rearWasBlockedInCycle = false;
+                    } else if (fBlk && rBlk) {
+                        if (!ps.rearWasBlockedInCycle) {
+                            ps.rearWasBlockedInCycle = true;
+                            ps.bothOccupiedStartMs   = nowMs;
+                        } else if ((nowMs - ps.bothOccupiedStartMs) >= TrafficConfig::PASSAGE_BOTH_CONGESTION_MS) {
+                            // Continuous simultaneous blockage -> congestion; suspend counting
+                            ps.state                 = RoadPassageState::BOTH_OCCUPIED;
+                            ps.congestionSuspended   = true;
+                            ps.rearWasBlockedInCycle = false;
+                        }
+                    } else if (fBlk && !rBlk) {
+                        if (ps.rearWasBlockedInCycle) {
+                            // Valid rear blocked-to-clear cycle while front remained blocked -> +1 passage
+                            ps.confirmedPassages++;
+                            if (ps.rollingPassages < 0xFFFFU) {
+                                ps.rollingPassages++;
+                            }
+                            ps.lastPassageMs         = nowMs;
+                            ps.zoneStartMs           = nowMs; // Reset zone timeout for next consecutive vehicle
+                            ps.rearWasBlockedInCycle = false;
+                            const uint32_t winElapsed = nowMs - ps.rollingWindowStartMs;
+                            const uint32_t effWinMs   = (winElapsed < 10000U) ? 10000U : winElapsed;
+                            ps.arrivalRateTenthsPerMin = static_cast<uint16_t>((static_cast<uint32_t>(ps.rollingPassages) * 600000UL) / effWinMs);
+                        } else if ((nowMs - ps.zoneStartMs) >= TrafficConfig::PASSAGE_SEQUENCE_TIMEOUT_MS) {
+                            ps.incompleteSequences++;
+                            ps.state                 = RoadPassageState::INCOMPLETE_WAIT_CLEAR;
+                            ps.rearWasBlockedInCycle = false;
+                        }
+                    }
+                    break;
+
+                case RoadPassageState::BOTH_OCCUPIED:
+                    if (fBlk && !rBlk) {
+                        // Rear cleared after congestion; resume valid counting from clean zone state
+                        ps.state                 = RoadPassageState::ZONE_OCCUPIED;
+                        ps.zoneStartMs           = nowMs;
+                        ps.congestionSuspended   = false;
+                        ps.rearWasBlockedInCycle = false;
+                    } else if (!fBlk && rBlk) {
+                        ps.incompleteSequences++;
+                        ps.state                 = RoadPassageState::INCOMPLETE_WAIT_CLEAR;
+                        ps.congestionSuspended   = false;
+                        ps.rearWasBlockedInCycle = false;
+                    }
+                    break;
+
+                case RoadPassageState::INCOMPLETE_WAIT_CLEAR:
+                default:
+                    // Wait until both sensors become clear
+                    break;
+            }
+        }
+    }
+
+    const RoadPassageStats& getRoadPassageStats(TrafficConfig::MovementId road) const {
+        const uint8_t r = static_cast<uint8_t>(road);
+        return roadPassages_[r < TrafficConfig::VEHICLE_GROUP_COUNT ? r : 0];
+    }
+
     const IrChannelStatus& getChannel(uint8_t idx) const {
         return channels_[idx < TrafficConfig::IR_SENSOR_COUNT ? idx : 0];
     }
@@ -457,6 +629,7 @@ private:
 
     TrafficConfig::SensorConfig config_;
     IrChannelStatus channels_[TrafficConfig::IR_SENSOR_COUNT];
+    RoadPassageStats roadPassages_[TrafficConfig::VEHICLE_GROUP_COUNT];
     uint32_t lastSampleMs_;
 };
 

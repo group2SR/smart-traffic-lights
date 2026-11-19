@@ -2481,6 +2481,413 @@ void test_req14_pedestrian_requests_served_safely(void) {
     TEST_ASSERT_FALSE(out.turnGreen);
 }
 
+// ============================================================================
+// PART V: DEFECT CLOSURE REGRESSION TESTS (DEF-01, DEF-02, DEF-07, DEF-08, DEF-09)
+// ============================================================================
+
+void test_def01_pedestrian_gpio_consistency(void) {
+    TEST_ASSERT_EQUAL_UINT8(19, TrafficConfig::PIN_PED1_WALK);
+    TEST_ASSERT_EQUAL_UINT8(18, TrafficConfig::PIN_PED1_DONT_WALK);
+    TEST_ASSERT_EQUAL_UINT8(32, TrafficConfig::PIN_PED1_BUTTON);
+    TEST_ASSERT_EQUAL_UINT8(16, TrafficConfig::PIN_PED2_WALK);
+    TEST_ASSERT_EQUAL_UINT8(17, TrafficConfig::PIN_PED2_DONT_WALK);
+    TEST_ASSERT_EQUAL_UINT8(4,  TrafficConfig::PIN_PED2_BUTTON);
+
+    TrafficController ctrl;
+    ctrl.begin(0);
+    ctrl.setControlMode(0, ControlMode::AUTO);
+    ctrl.setSimulationMode(0, true);
+    ctrl.update(1000); // -> ALL_RED
+    ctrl.update(2000); // -> MAIN_GREEN
+
+    // Request Crossing 1 only -> Crossing 1 WALK (19) active, Crossing 2 stays DON'T WALK (17)
+    TEST_ASSERT_TRUE(ctrl.triggerSimPedestrianChannel(2500, 0));
+    ctrl.update(6000); // MAIN_GREEN min (4000ms) -> MAIN_YELLOW
+    ctrl.update(8000); // -> ALL_RED
+    ctrl.update(9000); // -> PED_WALK
+
+    TEST_ASSERT_EQUAL(TrafficState::PED_WALK, ctrl.getState());
+    SignalOutputs out1 = ctrl.getOutputs();
+    TEST_ASSERT_TRUE(out1.pedWalk);
+    TEST_ASSERT_FALSE(out1.pedDontWalk);
+    TEST_ASSERT_FALSE(out1.ped2Walk);
+    TEST_ASSERT_TRUE(out1.ped2DontWalk);
+    TEST_ASSERT_TRUE(out1.mainRed && out1.sideRed && out1.turnRed);
+}
+
+void test_def02_protected_turn_commissioning_safety_gate(void) {
+    // Protected Turn must default to disabled
+    TEST_ASSERT_FALSE(TrafficConfig::PROTECTED_TURN_GEOMETRY_VERIFIED);
+    TEST_ASSERT_FALSE(TrafficConfig::DEFAULT_CONFLICT_MATRIX.protectedTurnCommissioned);
+
+    TrafficController ctrl;
+    ctrl.begin(0);
+    TEST_ASSERT_FALSE(ctrl.isProtectedTurnCommissioned());
+
+    // Cannot commission Protected Turn if vehicle driver is unverified
+    const char* rejectReason = nullptr;
+    TEST_ASSERT_FALSE(ctrl.commissionProtectedTurn(100, true, &rejectReason));
+    TEST_ASSERT_FALSE(ctrl.isProtectedTurnCommissioned());
+
+    // Commission vehicle driver, then verify corrupted conflict matrix blocks turn commissioning
+    ctrl.configureVehicleDriver(200, TrafficConfig::OutputDriverType::DIRECT_ACTIVE_HIGH);
+    TEST_ASSERT_TRUE(ctrl.commissionVehicleDriver(200, true));
+
+    TrafficConfig::ConflictMatrixConfig badMatrix = TrafficConfig::DEFAULT_CONFLICT_MATRIX;
+    badMatrix.conflicts[0][2] = false; // Invalid: Main vs Turn cleared
+    TEST_ASSERT_FALSE(ctrl.setConflictMatrixConfig(300, badMatrix));
+    TEST_ASSERT_TRUE(ctrl.getConflictMatrixConfig().conflicts[0][2]); // Sanitized back to safe default
+
+    // Explicit commissioning succeeds only when conflict matrix & driver are valid
+    TEST_ASSERT_TRUE(ctrl.commissionProtectedTurn(400, true, &rejectReason));
+    TEST_ASSERT_TRUE(ctrl.isProtectedTurnCommissioned());
+
+    // Logical reset preserves safe commissioning gate without silently enabling an unverified turn
+    ctrl.setProtectedTurnCommissioned(500, false);
+    ctrl.resetLogical(600, "TEST_RESET");
+    TEST_ASSERT_FALSE(ctrl.isProtectedTurnCommissioned());
+}
+
+void test_def07_main_clear_gap_timing(void) {
+    TrafficController ctrl;
+    ctrl.begin(0);
+    ctrl.setControlMode(0, ControlMode::AUTO);
+    ctrl.setSimulationMode(0, true);
+    ctrl.update(1000); // -> ALL_RED
+    ctrl.update(2000); // -> MAIN_GREEN (stateStartMs = 2000)
+
+    // Inject both Main presence and Side demand
+    TEST_ASSERT_TRUE(ctrl.setSimMovementDemand(2500, TrafficConfig::MovementId::MAIN_ROAD, true));
+    TEST_ASSERT_TRUE(ctrl.setSimMovementDemand(2500, TrafficConfig::MovementId::SIDE_ROAD, true));
+
+    // At 6000 ms (mainMinGreenMs=4000 elapsed), Main still has presence -> extends MAIN_GREEN
+    ctrl.update(6000);
+    TEST_ASSERT_EQUAL(TrafficState::MAIN_GREEN, ctrl.getState());
+
+    // Clear Main demand at 6500 ms -> mainClearGapMs (2000 ms) starts; must NOT yield immediately
+    TEST_ASSERT_TRUE(ctrl.setSimMovementDemand(6500, TrafficConfig::MovementId::MAIN_ROAD, false));
+    ctrl.update(8000); // 1500 ms gap elapsed < 2000 ms
+    TEST_ASSERT_EQUAL(TrafficState::MAIN_GREEN, ctrl.getState());
+
+    // At 8500 ms (2000 ms gap elapsed), yields to MAIN_YELLOW
+    ctrl.update(8500);
+    TEST_ASSERT_EQUAL(TrafficState::MAIN_YELLOW, ctrl.getState());
+}
+
+void test_def08_lamp_diagnostic_timing_and_phase_served(void) {
+    TrafficController ctrl;
+    ctrl.begin(0);
+    ctrl.configureVehicleDriver(0, TrafficConfig::OutputDriverType::DIRECT_ACTIVE_HIGH);
+    TEST_ASSERT_TRUE(ctrl.commissionVehicleDriver(0, true));
+    ctrl.setControlMode(0, ControlMode::FIXED);
+    ctrl.update(1000); // -> ALL_RED
+    ctrl.update(2000); // -> MAIN_GREEN
+
+    // Start lamp diagnostics during MAIN_GREEN: must go through MAIN_YELLOW (2000ms) first
+    TEST_ASSERT_TRUE(ctrl.startLampDiagnostics(3000, 1000, 1));
+    TEST_ASSERT_EQUAL(TrafficState::MAIN_YELLOW, ctrl.getState());
+    ctrl.update(4999);
+    TEST_ASSERT_EQUAL(TrafficState::MAIN_YELLOW, ctrl.getState());
+
+    // At 5000 ms yellow completes -> enters ALL_RED, and diagnostic stepStartMs resets to 5000 ms
+    ctrl.update(5000);
+    TEST_ASSERT_EQUAL(TrafficState::ALL_RED, ctrl.getState());
+    TEST_ASSERT_EQUAL_UINT32(5000, ctrl.getLampDiagnosticSession().stepStartMs);
+
+    // First 500ms clearance must NOT expire prematurely at 5100 ms
+    ctrl.update(5100);
+    TEST_ASSERT_EQUAL_UINT8(0, ctrl.getLampDiagnosticSession().currentStep);
+
+    // At 5500 ms (500ms after ALL_RED entry), step 1 begins
+    ctrl.update(5500);
+    TEST_ASSERT_EQUAL_UINT8(1, ctrl.getLampDiagnosticSession().currentStep);
+}
+
+void test_def09_clear_command_explicit_acknowledgement(void) {
+    static char lastLine[128] = {0};
+    TrafficController ctrl;
+    ctrl.begin(0);
+    SerialCommandHandler handler;
+    handler.setOutputCallback([](const char* line) {
+        if (line) {
+            strncpy(lastLine, line, sizeof(lastLine) - 1);
+            lastLine[sizeof(lastLine) - 1] = '\0';
+        }
+    });
+
+    // CLEAR in HARDWARE_READY with no active fault must emit explicit rejection message
+    lastLine[0] = '\0';
+    SerialCommandResult res = handler.executeCommand(1000, "CLEAR", ctrl);
+    TEST_ASSERT_EQUAL(SerialCommandResult::REJECTED_BY_STATE, res);
+    TEST_ASSERT_TRUE(strstr(lastLine, "COMMAND_REJECTED") != nullptr);
+}
+
+void test_prototype_protected_turn_timings_and_extension(void) {
+    TEST_ASSERT_EQUAL_UINT32(10000, TrafficConfig::PROTOTYPE_TURN_MIN_GREEN_MS);
+    TEST_ASSERT_EQUAL_UINT32(20000, TrafficConfig::PROTOTYPE_TURN_MAX_GREEN_MS);
+    TEST_ASSERT_EQUAL_UINT32(3000,  TrafficConfig::PROTOTYPE_TURN_CLEAR_GAP_MS);
+    TEST_ASSERT_EQUAL_UINT32(3000,  TrafficConfig::PROTOTYPE_TURN_YELLOW_MS);
+    TEST_ASSERT_EQUAL_UINT32(2000,  TrafficConfig::PROTOTYPE_ALL_RED_MS);
+
+    TrafficController ctrl;
+    ctrl.begin(0);
+    ctrl.setTimingConfig(0, TrafficConfig::PROTOTYPE_TIMING_CONFIG);
+    ctrl.configureVehicleDriver(0, TrafficConfig::OutputDriverType::DIRECT_ACTIVE_HIGH);
+    TEST_ASSERT_TRUE(ctrl.commissionVehicleDriver(0, true));
+    TEST_ASSERT_TRUE(ctrl.commissionProtectedTurn(0, true));
+    ctrl.setControlMode(0, ControlMode::AUTO);
+    ctrl.setSimulationMode(0, true);
+
+    ctrl.update(1000); // -> ALL_RED
+    ctrl.update(3000); // -> MAIN_GREEN (allRed=2000ms)
+    TEST_ASSERT_TRUE(ctrl.setSimMovementDemand(4000, TrafficConfig::MovementId::PROTECTED_TURN, true));
+    ctrl.update(28000); // MAIN_GREEN min (25000ms) -> MAIN_YELLOW
+    ctrl.update(31000); // -> ALL_RED
+    ctrl.update(33000); // -> TURN_GREEN (stateStartMs = 33000)
+    TEST_ASSERT_EQUAL(TrafficState::TURN_GREEN, ctrl.getState());
+
+    // Clear turn demand early at 34000ms -> must still hold minimum 10s (until 43000ms)
+    TEST_ASSERT_TRUE(ctrl.setSimMovementDemand(34000, TrafficConfig::MovementId::PROTECTED_TURN, false));
+    ctrl.update(42999);
+    TEST_ASSERT_EQUAL(TrafficState::TURN_GREEN, ctrl.getState());
+    ctrl.update(43000); // 10s min green elapsed + gap > 3s -> TURN_YELLOW
+    TEST_ASSERT_EQUAL(TrafficState::TURN_YELLOW, ctrl.getState());
+
+    // Turn yellow holds full 3s (until 46000ms) -> ALL_RED
+    ctrl.update(45999);
+    TEST_ASSERT_EQUAL(TrafficState::TURN_YELLOW, ctrl.getState());
+    ctrl.update(46000);
+    TEST_ASSERT_EQUAL(TrafficState::ALL_RED, ctrl.getState());
+}
+
+void test_adv_adaptive_vehicle_fairness_and_30s_urgency(void) {
+    TrafficController ctrl;
+    ctrl.begin(0);
+    ctrl.setPhysicalIrValidated(true);
+    ctrl.configureVehicleDriver(0, TrafficConfig::OutputDriverType::DIRECT_ACTIVE_HIGH);
+    TEST_ASSERT_TRUE(ctrl.commissionVehicleDriver(0, true));
+    TEST_ASSERT_TRUE(ctrl.commissionProtectedTurn(0, true));
+    TEST_ASSERT_TRUE(ctrl.setControlMode(0, ControlMode::ADAPTIVE));
+    ctrl.setSimulationMode(0, true);
+
+    ctrl.update(1000); // -> ALL_RED
+    ctrl.update(2000); // -> MAIN_GREEN
+
+    // Single waiting vehicle on Side Road & Protected Turn vs Main demand
+    TEST_ASSERT_TRUE(ctrl.setSimMovementDemand(2500, TrafficConfig::MovementId::SIDE_ROAD, true));
+    TEST_ASSERT_TRUE(ctrl.setSimMovementDemand(2500, TrafficConfig::MovementId::PROTECTED_TURN, true));
+    ctrl.update(2600);
+
+    const ApproachDemandState& sideSt = ctrl.getDemandManager().getApproachState(TrafficConfig::MovementId::SIDE_ROAD);
+    const ApproachDemandState& turnSt = ctrl.getDemandManager().getApproachState(TrafficConfig::MovementId::PROTECTED_TURN);
+    TEST_ASSERT_TRUE(sideSt.hasDemand);
+    TEST_ASSERT_TRUE(turnSt.hasDemand);
+    TEST_ASSERT_TRUE(sideSt.priorityScore > 0 && sideSt.priorityScore <= 100);
+    TEST_ASSERT_TRUE(turnSt.priorityScore > 0 && turnSt.priorityScore <= 100);
+
+    // Advance 30s waiting on Turn while keeping Main/Side active -> Turn urgencyActive == true
+    ctrl.update(33000);
+    const ApproachDemandState& turn30 = ctrl.getDemandManager().getApproachState(TrafficConfig::MovementId::PROTECTED_TURN);
+    if (turn30.hasDemand && turn30.waitingTimeMs >= 30000) {
+        TEST_ASSERT_TRUE(turn30.urgencyActive);
+        TEST_ASSERT_TRUE(turn30.waitingScore >= 85);
+    }
+}
+
+void test_adv_adaptive_pedestrian_first_priority_and_conflicts(void) {
+    TrafficController ctrl;
+    ctrl.begin(0);
+    ctrl.setPhysicalIrValidated(true);
+    TEST_ASSERT_TRUE(ctrl.setControlMode(0, ControlMode::ADAPTIVE));
+    ctrl.setSimulationMode(0, true);
+
+    ctrl.update(1000); // -> ALL_RED
+    ctrl.update(2000); // -> MAIN_GREEN (minGreen=4000ms)
+
+    // Vehicle demand + Pedestrian 1 & 2 simultaneous requests during minGreen
+    TEST_ASSERT_TRUE(ctrl.setSimMovementDemand(2500, TrafficConfig::MovementId::SIDE_ROAD, true));
+    TEST_ASSERT_TRUE(ctrl.triggerSimPedestrianChannel(2500, 0));
+    TEST_ASSERT_TRUE(ctrl.triggerSimPedestrianChannel(2500, 1));
+    // Repeated request must be ignored (returns true as command accepted, but does not duplicate)
+    TEST_ASSERT_TRUE(ctrl.triggerSimPedestrianChannel(2600, 0));
+
+    // Must NOT interrupt active minimum green (until 6000ms)
+    ctrl.update(5999);
+    TEST_ASSERT_EQUAL(TrafficState::MAIN_GREEN, ctrl.getState());
+
+    // At 6000ms, pedestrian-first priority selects PEDESTRIAN via MAIN_YELLOW -> ALL_RED
+    ctrl.update(6000);
+    TEST_ASSERT_EQUAL(TrafficState::MAIN_YELLOW, ctrl.getState());
+    TEST_ASSERT_EQUAL(NextPhaseTarget::PEDESTRIAN, ctrl.getNextTarget());
+    ctrl.update(8000); // -> ALL_RED
+    ctrl.update(9000); // -> PED_WALK
+    TEST_ASSERT_EQUAL(TrafficState::PED_WALK, ctrl.getState());
+
+    // Compatible crossings served together; all vehicle signals RED
+    SignalOutputs out = ctrl.getOutputs();
+    TEST_ASSERT_TRUE(out.pedWalk && out.ped2Walk);
+    TEST_ASSERT_TRUE(out.mainRed && out.sideRed && out.turnRed);
+
+    // Conflicting pedestrian crossings in conflict matrix -> served independently
+    TrafficConfig::ConflictMatrixConfig cm = TrafficConfig::DEFAULT_CONFLICT_MATRIX;
+    cm.conflicts[3][4] = true;
+    cm.conflicts[4][3] = true;
+    PedestrianController pedOnly;
+    pedOnly.reset(0);
+    pedOnly.requestPedestrian(0, false, 100);
+    pedOnly.requestPedestrian(1, false, 200);
+    pedOnly.beginWalkPhase(cm);
+    TEST_ASSERT_TRUE(pedOnly.isWalkActive(0));
+    TEST_ASSERT_FALSE(pedOnly.isWalkActive(1));
+    pedOnly.beginClearancePhase();
+    TEST_ASSERT_FALSE(pedOnly.hasDemand(0));
+    TEST_ASSERT_TRUE(pedOnly.hasDemand(1)); // Preserved for independent service
+}
+
+void test_adv_adaptive_safety_sensor_fault_and_mode_switching(void) {
+    TrafficController ctrl;
+    ctrl.begin(0);
+    ctrl.setPhysicalIrValidated(true);
+    TEST_ASSERT_TRUE(ctrl.setControlMode(0, ControlMode::ADAPTIVE));
+    ctrl.update(1000); // -> ALL_RED
+    ctrl.update(2000); // -> MAIN_GREEN
+
+    // Sensor stuck fault (> 30s) triggers fixed-time fallback without FAULT_SAFE lockout
+    const bool irAllActive[TrafficConfig::IR_SENSOR_COUNT] = { true, true, false, true, true, true };
+    ctrl.processAllPhysicalInputs(3000, irAllActive, true, true);
+    ctrl.processAllPhysicalInputs(34000, irAllActive, true, true); // > 30000ms stuck
+    TEST_ASSERT_TRUE(ctrl.isHwIrFaultSuspected());
+    TEST_ASSERT_NOT_EQUAL(TrafficState::FAULT_SAFE, ctrl.getState());
+
+    // Switch cleanly between ADAPTIVE and FIXED
+    TEST_ASSERT_TRUE(ctrl.setControlMode(34500, ControlMode::FIXED));
+    TEST_ASSERT_EQUAL(ControlMode::FIXED, ctrl.getControlMode());
+}
+
+static void feedIrPair(VehicleDetector& det, FaultManager& fm, uint32_t nowMs,
+                       uint8_t frontIdx, bool frontBlk, uint8_t rearIdx, bool rearBlk) {
+    det.updateChannel(frontIdx, nowMs, !frontBlk, fm);
+    det.updateChannel(rearIdx,  nowMs, !rearBlk,  fm);
+    det.updateRoadPassageTracking(nowMs);
+}
+
+void test_dual_ir_passage_one_and_consecutive_vehicles(void) {
+    VehicleDetector det;
+    FaultManager fm;
+    det.reset(0);
+    det.setAllValidated(true);
+
+    // 1. One vehicle: Front (IR1=0) blocked -> Rear (IR2=1) blocked -> Rear cleared while Front blocked -> Front cleared
+    feedIrPair(det, fm, 100,  0, true,  1, false);
+    feedIrPair(det, fm, 250,  0, true,  1, false); // Front stable
+    feedIrPair(det, fm, 300,  0, true,  1, true);
+    feedIrPair(det, fm, 450,  0, true,  1, true);  // Rear stable
+    feedIrPair(det, fm, 500,  0, true,  1, false);
+    feedIrPair(det, fm, 650,  0, true,  1, false); // Rear cleared -> +1 passage
+    TEST_ASSERT_EQUAL_UINT32(1, det.getRoadPassageStats(TrafficConfig::MovementId::MAIN_ROAD).confirmedPassages);
+
+    // 2. Repeated/continuous rear activation while front stays blocked -> 1 more passage only on clear (no duplicate count while held)
+    feedIrPair(det, fm, 700,  0, true,  1, true);
+    feedIrPair(det, fm, 850,  0, true,  1, true);
+    feedIrPair(det, fm, 1000, 0, true,  1, true); // Held continuous < congestion -> still 1
+    TEST_ASSERT_EQUAL_UINT32(1, det.getRoadPassageStats(TrafficConfig::MovementId::MAIN_ROAD).confirmedPassages);
+    feedIrPair(det, fm, 1100, 0, true,  1, false);
+    feedIrPair(det, fm, 1250, 0, true,  1, false); // Rear cleared -> +1 (total 2)
+    TEST_ASSERT_EQUAL_UINT32(2, det.getRoadPassageStats(TrafficConfig::MovementId::MAIN_ROAD).confirmedPassages);
+
+    // Both clear resets sequence cleanly
+    feedIrPair(det, fm, 1300, 0, false, 1, false);
+    feedIrPair(det, fm, 1450, 0, false, 1, false);
+    TEST_ASSERT_EQUAL(RoadPassageState::IDLE, det.getRoadPassageStats(TrafficConfig::MovementId::MAIN_ROAD).state);
+}
+
+void test_dual_ir_passage_both_blocked_and_incomplete_sequences(void) {
+    VehicleDetector det;
+    FaultManager fm;
+    det.reset(0);
+    det.setAllValidated(true);
+
+    // Both sensors become blocked simultaneously from IDLE -> congestion, 0 counts
+    feedIrPair(det, fm, 100, 2, true,  3, true);
+    feedIrPair(det, fm, 250, 2, true,  3, true);
+    TEST_ASSERT_TRUE(det.getRoadPassageStats(TrafficConfig::MovementId::SIDE_ROAD).bothOccupied);
+    TEST_ASSERT_TRUE(det.getRoadPassageStats(TrafficConfig::MovementId::SIDE_ROAD).congestionSuspended);
+    TEST_ASSERT_EQUAL_UINT32(0, det.getRoadPassageStats(TrafficConfig::MovementId::SIDE_ROAD).confirmedPassages);
+
+    // Clear both -> back to IDLE
+    feedIrPair(det, fm, 300, 2, false, 3, false);
+    feedIrPair(det, fm, 450, 2, false, 3, false);
+
+    // Both remaining blocked >= 5000ms after front-first -> suspends counting, 0 counts on clear
+    feedIrPair(det, fm, 500,  2, true,  3, false);
+    feedIrPair(det, fm, 650,  2, true,  3, false);
+    feedIrPair(det, fm, 700,  2, true,  3, true);
+    feedIrPair(det, fm, 850,  2, true,  3, true);
+    feedIrPair(det, fm, 6000, 2, true,  3, true); // >= 5000ms simultaneous
+    TEST_ASSERT_TRUE(det.getRoadPassageStats(TrafficConfig::MovementId::SIDE_ROAD).congestionSuspended);
+    feedIrPair(det, fm, 6100, 2, true,  3, false);
+    feedIrPair(det, fm, 6250, 2, true,  3, false);
+    TEST_ASSERT_EQUAL_UINT32(0, det.getRoadPassageStats(TrafficConfig::MovementId::SIDE_ROAD).confirmedPassages);
+    // Recovery after congestion: rear clears while front remains blocked -> resumes counting on next valid cycle
+    TEST_ASSERT_FALSE(det.getRoadPassageStats(TrafficConfig::MovementId::SIDE_ROAD).congestionSuspended);
+    feedIrPair(det, fm, 6300, 2, true,  3, true);
+    feedIrPair(det, fm, 6450, 2, true,  3, true);
+    feedIrPair(det, fm, 6500, 2, true,  3, false);
+    feedIrPair(det, fm, 6650, 2, true,  3, false);
+    TEST_ASSERT_EQUAL_UINT32(1, det.getRoadPassageStats(TrafficConfig::MovementId::SIDE_ROAD).confirmedPassages);
+
+    // Clear both -> back to IDLE
+    feedIrPair(det, fm, 6700, 2, false, 3, false);
+    feedIrPair(det, fm, 6850, 2, false, 3, false);
+
+    // Slow-moving vehicle (2500ms overlap < 5000ms) -> still counted accurately as 1 passage
+    feedIrPair(det, fm, 7000, 2, true,  3, false);
+    feedIrPair(det, fm, 7150, 2, true,  3, false);
+    feedIrPair(det, fm, 7200, 2, true,  3, true);
+    feedIrPair(det, fm, 7350, 2, true,  3, true);
+    feedIrPair(det, fm, 9500, 2, true,  3, true); // 2.15s overlap (< 5000ms)
+    feedIrPair(det, fm, 9600, 2, true,  3, false);
+    feedIrPair(det, fm, 9750, 2, true,  3, false);
+    TEST_ASSERT_EQUAL_UINT32(2, det.getRoadPassageStats(TrafficConfig::MovementId::SIDE_ROAD).confirmedPassages);
+
+    // Clear both -> back to IDLE
+    feedIrPair(det, fm, 9800, 2, false, 3, false);
+    feedIrPair(det, fm, 9950, 2, false, 3, false);
+
+    // Front clearing before rear activation -> incomplete sequence, 0 new counts
+    feedIrPair(det, fm, 10000, 2, true,  3, false);
+    feedIrPair(det, fm, 10150, 2, true,  3, false);
+    feedIrPair(det, fm, 10200, 2, false, 3, true);
+    feedIrPair(det, fm, 10350, 2, false, 3, true);
+    TEST_ASSERT_EQUAL_UINT32(2, det.getRoadPassageStats(TrafficConfig::MovementId::SIDE_ROAD).confirmedPassages);
+    TEST_ASSERT_TRUE(det.getRoadPassageStats(TrafficConfig::MovementId::SIDE_ROAD).incompleteSequences > 0);
+}
+
+void test_dual_ir_passage_faults_and_adaptive_integration(void) {
+    TrafficController ctrl;
+    ctrl.begin(0);
+    ctrl.setPhysicalIrValidated(true);
+    TEST_ASSERT_TRUE(ctrl.setControlMode(0, ControlMode::ADAPTIVE));
+    ctrl.update(1000); // -> ALL_RED
+    ctrl.update(2000); // -> MAIN_GREEN
+
+    // Rear chatter (> 12 transitions/sec) must NOT produce passage counts
+    for (uint8_t k = 0; k < 14; ++k) {
+        const bool ir[TrafficConfig::IR_SENSOR_COUNT] = { false, (k % 2 == 0), true, true, true, true };
+        ctrl.processAllPhysicalInputs(2100 + k * 20, ir, true, true);
+    }
+    TEST_ASSERT_EQUAL_UINT32(0, ctrl.getVehicleDetector().getRoadPassageStats(TrafficConfig::MovementId::MAIN_ROAD).confirmedPassages);
+    TEST_ASSERT_TRUE(ctrl.getVehicleDetector().getChannel(1).chatterFault);
+
+    // Stuck front sensor (> 30s) must suspend counting without unsafe green
+    const bool irStuck[TrafficConfig::IR_SENSOR_COUNT] = { true, true, false, true, true, true };
+    ctrl.processAllPhysicalInputs(3000, irStuck, true, true);
+    ctrl.processAllPhysicalInputs(34000, irStuck, true, true);
+    TEST_ASSERT_TRUE(ctrl.getVehicleDetector().getChannel(2).stuckFault);
+    TEST_ASSERT_EQUAL_UINT32(0, ctrl.getVehicleDetector().getRoadPassageStats(TrafficConfig::MovementId::SIDE_ROAD).confirmedPassages);
+    TEST_ASSERT_NOT_EQUAL(TrafficState::FAULT_SAFE, ctrl.getState());
+}
+
 void setup() {
     delay(2000);
     UNITY_BEGIN();
@@ -2558,6 +2965,20 @@ void setup() {
     RUN_TEST(test_req12_no_conflicting_vehicle_greens);
     RUN_TEST(test_req13_yellow_and_all_red_clearance_enforced);
     RUN_TEST(test_req14_pedestrian_requests_served_safely);
+
+    // Part V: Defect closure regression tests
+    RUN_TEST(test_def01_pedestrian_gpio_consistency);
+    RUN_TEST(test_def02_protected_turn_commissioning_safety_gate);
+    RUN_TEST(test_def07_main_clear_gap_timing);
+    RUN_TEST(test_def08_lamp_diagnostic_timing_and_phase_served);
+    RUN_TEST(test_def09_clear_command_explicit_acknowledgement);
+    RUN_TEST(test_prototype_protected_turn_timings_and_extension);
+    RUN_TEST(test_adv_adaptive_vehicle_fairness_and_30s_urgency);
+    RUN_TEST(test_adv_adaptive_pedestrian_first_priority_and_conflicts);
+    RUN_TEST(test_adv_adaptive_safety_sensor_fault_and_mode_switching);
+    RUN_TEST(test_dual_ir_passage_one_and_consecutive_vehicles);
+    RUN_TEST(test_dual_ir_passage_both_blocked_and_incomplete_sequences);
+    RUN_TEST(test_dual_ir_passage_faults_and_adaptive_integration);
     UNITY_END();
 }
 

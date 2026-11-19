@@ -154,6 +154,12 @@ void printStatus(uint32_t nowMs) {
     Serial.printf("  Current FSM State : %s (Elapsed: %lu ms)\r\n",
                   TrafficController::stateToString(snap.currentFsmState),
                   static_cast<unsigned long>(snap.stateElapsedMs));
+    if (controller.isAllGreenTestActive()) {
+        const auto& ag = controller.getAllGreenDiagnosticSession();
+        Serial.printf("  All-Green Diag    : ACTIVE (Duration: %lu ms | Remaining: %lu ms)\r\n",
+                      static_cast<unsigned long>(ag.durationMs),
+                      static_cast<unsigned long>(controller.getAllGreenRemainingMs(nowMs)));
+    }
     Serial.printf("  State Elapsed     : %lu ms\r\n", static_cast<unsigned long>(snap.stateElapsedMs));
     Serial.printf("  Side Gap Timer    : %s (%lu ms)\r\n",
                   snap.sideGapActive ? "ACTIVE" : "INACTIVE",
@@ -181,6 +187,29 @@ void printStatus(uint32_t nowMs) {
     Serial.printf("  Active Fault Mask : 0x%04X | Last Fault: %s\r\n",
                   snap.activeFaultMask,
                   controller.getFaultReason());
+    const DemandManager& dm = controller.getDemandManager();
+    const PedestrianPrioritySummary pedPri = controller.getPedestrianController().evaluatePriority(
+        nowMs, controller.getConflictMatrixConfig(), dm.getDemandConfig().pedUrgencyWaitMs);
+    Serial.printf("  Adaptive Scores   : MAIN=%u SIDE=%u TURN=%u | AllocGreen=%lu ms\r\n",
+                  dm.getNormalizedPriority(TrafficConfig::MovementId::MAIN_ROAD),
+                  dm.getNormalizedPriority(TrafficConfig::MovementId::SIDE_ROAD),
+                  dm.getNormalizedPriority(TrafficConfig::MovementId::PROTECTED_TURN),
+                  static_cast<unsigned long>(controller.getCurrentGreenAllocationMs()));
+    Serial.printf("  Movement Waits    : MAIN=%lu ms SIDE=%lu ms TURN=%lu ms | PED1=%lu ms PED2=%lu ms\r\n",
+                  static_cast<unsigned long>(dm.getApproachState(TrafficConfig::MovementId::MAIN_ROAD).waitingTimeMs),
+                  static_cast<unsigned long>(dm.getApproachState(TrafficConfig::MovementId::SIDE_ROAD).waitingTimeMs),
+                  static_cast<unsigned long>(dm.getApproachState(TrafficConfig::MovementId::PROTECTED_TURN).waitingTimeMs),
+                  static_cast<unsigned long>(pedPri.ped1WaitMs),
+                  static_cast<unsigned long>(pedPri.ped2WaitMs));
+    Serial.printf("  Selection Reason  : %s\r\n", controller.getSelectionReason());
+    Serial.printf("  Ped Priority      : %s\r\n", PedestrianController::priorityLevelToString(pedPri.level));
+    const ApproachDemandState& mPs = dm.getApproachState(TrafficConfig::MovementId::MAIN_ROAD);
+    const ApproachDemandState& sPs = dm.getApproachState(TrafficConfig::MovementId::SIDE_ROAD);
+    const ApproachDemandState& tPs = dm.getApproachState(TrafficConfig::MovementId::PROTECTED_TURN);
+    Serial.printf("  Passage Counts    : MAIN[P=%lu R=%u Rate=%u.%u Both=%d Inc=%u Last=%lu] SIDE[P=%lu R=%u Rate=%u.%u Both=%d Inc=%u Last=%lu] TURN[P=%lu R=%u Rate=%u.%u Both=%d Inc=%u Last=%lu]\r\n",
+                  static_cast<unsigned long>(mPs.confirmedPassages), mPs.rollingPassages, mPs.arrivalRateTenthsPerMin / 10U, mPs.arrivalRateTenthsPerMin % 10U, mPs.bothOccupied ? 1 : 0, mPs.incompleteSequences, static_cast<unsigned long>(mPs.lastPassageMs),
+                  static_cast<unsigned long>(sPs.confirmedPassages), sPs.rollingPassages, sPs.arrivalRateTenthsPerMin / 10U, sPs.arrivalRateTenthsPerMin % 10U, sPs.bothOccupied ? 1 : 0, sPs.incompleteSequences, static_cast<unsigned long>(sPs.lastPassageMs),
+                  static_cast<unsigned long>(tPs.confirmedPassages), tPs.rollingPassages, tPs.arrivalRateTenthsPerMin / 10U, tPs.arrivalRateTenthsPerMin % 10U, tPs.bothOccupied ? 1 : 0, tPs.incompleteSequences, static_cast<unsigned long>(tPs.lastPassageMs));
     Serial.println(F("==================================================="));
 }
 

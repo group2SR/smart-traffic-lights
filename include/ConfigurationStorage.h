@@ -50,8 +50,8 @@ enum class NvsLoadStatus : uint8_t {
 class ConfigurationStorage {
 public:
     static constexpr uint32_t CONFIG_MAGIC          = 0x53544C33UL; // "STL3"
-    static constexpr uint16_t CONFIG_SCHEMA_VERSION = 3;
-    static constexpr const char* NVS_NAMESPACE      = "stl_cfg_v3";
+    static constexpr uint16_t CONFIG_SCHEMA_VERSION = 5;
+    static constexpr const char* NVS_NAMESPACE      = "stl_cfg_v5";
     static constexpr const char* NVS_BLOB_KEY       = "ctrl_blob";
 
     ConfigurationStorage()
@@ -136,17 +136,28 @@ public:
         }
         if (cfg.demand.waitTimeWeightMs < 100 || cfg.demand.waitTimeWeightMs > 60000 ||
             cfg.demand.activeSensorWeight == 0 || cfg.demand.activeSensorWeight > 50 ||
-            cfg.demand.starvationSkipLimit == 0 || cfg.demand.starvationSkipLimit > 20) {
+            cfg.demand.starvationSkipLimit == 0 || cfg.demand.starvationSkipLimit > 20 ||
+            (static_cast<uint16_t>(cfg.demand.weightDemandPct) +
+             static_cast<uint16_t>(cfg.demand.weightWaitingPct) +
+             static_cast<uint16_t>(cfg.demand.weightFairnessPct) +
+             static_cast<uint16_t>(cfg.demand.weightContinuousPct)) != 100U ||
+            cfg.demand.urgencyWaitThresholdMs < 5000 ||
+            cfg.demand.maxWaitLimitMs < cfg.demand.urgencyWaitThresholdMs) {
             return false;
         }
         if (!cfg.conflictMatrix.rightHandTrafficRule) {
             return false;
         }
-        // Core conflicts must remain enabled
+        // Core conflicts must remain enabled (bidirectional check across all 5 movements)
         if (!cfg.conflictMatrix.conflicts[0][1] || !cfg.conflictMatrix.conflicts[1][0] ||
-            !cfg.conflictMatrix.conflicts[0][2] || !cfg.conflictMatrix.conflicts[1][2] ||
-            !cfg.conflictMatrix.conflicts[0][3] || !cfg.conflictMatrix.conflicts[1][3] ||
-            !cfg.conflictMatrix.conflicts[2][3]) {
+            !cfg.conflictMatrix.conflicts[0][2] || !cfg.conflictMatrix.conflicts[2][0] ||
+            !cfg.conflictMatrix.conflicts[1][2] || !cfg.conflictMatrix.conflicts[2][1] ||
+            !cfg.conflictMatrix.conflicts[0][3] || !cfg.conflictMatrix.conflicts[3][0] ||
+            !cfg.conflictMatrix.conflicts[1][3] || !cfg.conflictMatrix.conflicts[3][1] ||
+            !cfg.conflictMatrix.conflicts[2][3] || !cfg.conflictMatrix.conflicts[3][2] ||
+            !cfg.conflictMatrix.conflicts[0][4] || !cfg.conflictMatrix.conflicts[4][0] ||
+            !cfg.conflictMatrix.conflicts[1][4] || !cfg.conflictMatrix.conflicts[4][1] ||
+            !cfg.conflictMatrix.conflicts[2][4] || !cfg.conflictMatrix.conflicts[4][2]) {
             return false;
         }
         return true;

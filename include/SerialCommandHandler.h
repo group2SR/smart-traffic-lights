@@ -725,6 +725,7 @@ public:
             if (ctrl.clearNonFatalFaults(nowMs)) {
                 return SerialCommandResult::OK_EXECUTED;
             }
+            emitLine("EVENT: COMMAND_REJECTED | No active fault or simulated demand to clear");
             return SerialCommandResult::REJECTED_BY_STATE;
         }
         if (strcmp(normalized, "RESET") == 0) {

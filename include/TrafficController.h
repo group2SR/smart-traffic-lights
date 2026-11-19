@@ -223,6 +223,8 @@ public:
     NextPhaseTarget getNextTarget() const { return nextTarget_; }
     uint32_t getStateStartTime() const { return stateStartMs_; }
     uint32_t getStateElapsed(uint32_t nowMs) const { return nowMs - stateStartMs_; }
+    uint32_t getMainGapElapsed(uint32_t nowMs) const { return mainGapTimerActive_ ? (nowMs - mainGapStartMs_) : 0; }
+    bool isMainGapTimerActive() const { return mainGapTimerActive_; }
     uint32_t getSideGapElapsed(uint32_t nowMs) const { return sideGapTimerActive_ ? (nowMs - sideGapStartMs_) : 0; }
     bool isSideGapTimerActive() const { return sideGapTimerActive_; }
     bool isPedestrianClearanceActive() const { return postPedClearanceActive_; }
@@ -250,6 +252,9 @@ public:
         return detector_.isAnyChannelFaulted();
     }
     const char* getFaultReason() const { return faultMgr_.getLastFaultReason(); }
+    const char* getSelectionReason() const { return lastSelectionReason_; }
+    uint32_t getAllocatedGreenMs(TrafficConfig::MovementId movement) const;
+    uint32_t getCurrentGreenAllocationMs() const;
 
     const FaultManager& getFaultManager() const { return faultMgr_; }
     const VehicleDetector& getVehicleDetector() const { return detector_; }
@@ -301,8 +306,10 @@ private:
     NextPhaseTarget nextTarget_;
 
     uint32_t stateStartMs_;
+    uint32_t mainGapStartMs_;
     uint32_t sideGapStartMs_;
     uint32_t lastUpdateMs_;
+    bool     mainGapTimerActive_;
     bool     sideGapTimerActive_;
     bool     postPedClearanceActive_;
     bool     manualStepRequested_;
@@ -321,6 +328,7 @@ private:
 
     TransitionCallback transitionCb_;
     EventLogCallback   eventLogCb_;
+    mutable const char* lastSelectionReason_;
 };
 
 #endif // TRAFFIC_CONTROLLER_H
